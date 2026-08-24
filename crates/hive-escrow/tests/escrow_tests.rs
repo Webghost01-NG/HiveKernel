@@ -1,4 +1,5 @@
 use hive_core::{
+    auditor::ContractAuditor,
     receipt::{AgentKeypair, TaskReceipt},
     types::{AgentCapability, TaskSpec, TaskStatus},
 };
@@ -29,12 +30,15 @@ fn test_escrow_settlement_flow() {
     escrow.lock_escrow(task.id, "Delegator_Alpha".to_string(), 100).unwrap();
     escrow.assign_worker(task.id, "Worker_Beta".to_string()).unwrap();
 
+    let audit_report = ContractAuditor::audit_source(&task.description, &task.input_payload);
+    let output_json = serde_json::to_string(&audit_report).unwrap();
+
     let receipt = TaskReceipt::create_and_sign(
         task.id,
         "Worker_Beta",
         &keypair,
         &task.input_payload,
-        "Clean report: 0 issues.",
+        output_json,
         150,
     );
 

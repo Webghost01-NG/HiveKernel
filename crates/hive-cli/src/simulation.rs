@@ -1,7 +1,7 @@
 use crate::display::*;
 use colored::*;
 use hive_core::{
-    auditor::ContractAuditor,
+    auditor::{AuditReport, ContractAuditor},
     receipt::{AgentKeypair, TaskReceipt},
     types::{AgentCapability, TaskSpec},
 };
@@ -15,29 +15,65 @@ use hive_p2p::{
     network::SwarmMeshRouter,
     protocol::SwarmMessage,
 };
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
 
-pub async fn run_swarm_simulation(task_title: &str, bounty: u64, trigger_dispute: bool) -> anyhow::Result<()> {
+pub async fn run_swarm_simulation(
+    task_title: &str,
+    file_path: Option<&str>,
+    bounty: u64,
+    trigger_dispute: bool,
+) -> anyhow::Result<()> {
     print_banner();
 
-    // 1. Initialize Swarm Ledger & Mesh Network
+    // 1. Resolve Code Payload
+    let (target_name, code_payload) = match file_path {
+        Some(path) => {
+            let content = fs::read_to_string(path)?;
+            let file_name = Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Contract.sol");
+            (file_name.to_string(), content)
+        }
+        None => {
+            let default_contract = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract LiquidityVault {
+    mapping(address => uint256) public userBalances;
+
+    function withdraw() external {
+        uint256 amount = userBalances[msg.sender];
+        require(amount > 0, "Zero balance");
+        
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
+
+        userBalances[msg.sender] = 0; // State change after external call (Reentrancy)
+    }
+}
+"#;
+            ("LiquidityVault.sol".to_string(), default_contract.to_string())
+        }
+    };
+
+    // 2. Initialize Swarm Ledger & Router
     let mut ledger = SwarmLedger::new();
     let mut escrow = EscrowManager::new();
     let router = SwarmMeshRouter::new(100);
 
-    // Create Agent Keypairs
     let delegator_key = AgentKeypair::generate();
     let worker_a_key = AgentKeypair::generate();
     let _worker_b_key = AgentKeypair::generate();
-    let _validator_key = AgentKeypair::generate();
 
     let delegator_id = "Delegator_Alpha".to_string();
     let worker_a_id = "Worker_Auditor_Beta".to_string();
     let worker_b_id = "Worker_Speedy_Gamma".to_string();
     let validator_id = "Validator_Sentinel".to_string();
 
-    // Fund Accounts
     ledger.deposit(&delegator_id, 1000);
     ledger.deposit(&worker_a_id, 50);
     ledger.deposit(&worker_b_id, 50);
@@ -49,41 +85,30 @@ pub async fn run_swarm_simulation(task_title: &str, bounty: u64, trigger_dispute
     println!("    • Worker Gamma balance: {} USDC", ledger.balance_of(&worker_b_id).to_string().bright_yellow());
     println!("    • Validator balance: {} USDC", ledger.balance_of(&validator_id).to_string().bright_yellow());
 
-    sleep(Duration::from_millis(600)).await;
+    sleep(Duration::from_millis(400)).await;
 
-    // 2. Step 2: Task Creation & Escrow Locking
+    // 3. Step 2: Task Creation & Escrow Locking
     log_step(2, "Task Creation & Non-Custodial Escrow", "Delegator locks bounty funds in smart contract and broadcasts RFQ");
-    
-    let sample_contract = r#"
-    contract Vault {
-        mapping(address => uint256) public balances;
-        function withdraw() external {
-            uint256 bal = balances[msg.sender];
-            (bool s, ) = msg.sender.call{value: bal}("");
-            balances[msg.sender] = 0; // State change after external call
-        }
-    }
-    "#;
 
     let task = TaskSpec::new(
         delegator_id.clone(),
         delegator_key.public_key_hex(),
         AgentCapability::SmartContractAuditor,
-        task_title,
-        sample_contract,
+        &target_name,
+        &code_payload,
         bounty,
     );
 
     ledger.withdraw(&delegator_id, bounty);
     escrow.lock_escrow(task.id, delegator_id.clone(), bounty)?;
-    
-    log_event("DELEGATOR", &format!("Created Task [{}] - Bounty: {} USDC", task.id.to_string().bright_cyan(), bounty));
+
+    log_event("DELEGATOR", &format!("Created Task [{}] for [{}] - Bounty: {} USDC", task.id.to_string().bright_cyan(), target_name.bold(), bounty));
     log_event("ESCROW", &format!("Locked {} USDC into Escrow Contract", bounty));
 
     router.broadcast(SwarmMessage::TaskRfq(task.clone())).ok();
-    sleep(Duration::from_millis(700)).await;
+    sleep(Duration::from_millis(500)).await;
 
-    // 3. Step 3: P2P Reverse Auction & Bid Ranking
+    // 4. Step 3: P2P Reverse Auction & Bid Ranking
     log_step(3, "P2P Reverse Auction & Capability Matching", "Specialist agents discover RFQ on GossipSub and submit cryptographic bids");
 
     let bid_a = CandidateBid {
@@ -105,18 +130,28 @@ pub async fn run_swarm_simulation(task_title: &str, bounty: u64, trigger_dispute
 
     let winning_bid = AuctionMatcher::select_best_bid(&[bid_a, bid_b], bounty)?;
     log_success(&format!("Auction Won by [{}] with optimal score!", winning_bid.worker_id.bright_green().bold()));
-    
-    escrow.assign_worker(task.id, winning_bid.worker_id.clone())?;
-    sleep(Duration::from_millis(700)).await;
 
-    // 4. Step 4: Autonomous Work Execution & Cryptographic Receipt Generation
-    log_step(4, "Autonomous Work Execution & Signed Receipt", "Worker agent executes static analysis on contract code and seals output with Ed25519");
+    escrow.assign_worker(task.id, winning_bid.worker_id.clone())?;
+    sleep(Duration::from_millis(500)).await;
+
+    // 5. Step 4: Autonomous Work Execution & Cryptographic Receipt Generation
+    log_step(4, "Autonomous Work Execution & Signed Receipt", "Worker agent executes line-by-line static analysis and seals output with Ed25519");
 
     let output_content = if trigger_dispute {
-        "Audit Report: Vulnerability scan failed <<MALICIOUS_INJECTION>> bypass checks".to_string()
+        // Rogue Worker intentionally forges a clean report with 0 issues on vulnerable code
+        let fake_clean_report = AuditReport {
+            target_name: target_name.clone(),
+            total_lines: code_payload.lines().count(),
+            total_vulnerabilities: 0,
+            security_score: 100,
+            gas_efficiency_grade: "A+".to_string(),
+            findings: vec![],
+            summary: "Forged clean audit report: 0 vulnerabilities found".to_string(),
+        };
+        serde_json::to_string_pretty(&fake_clean_report)?
     } else {
-        let audit_report = ContractAuditor::audit_solidity_code(&task.input_payload);
-        serde_json::to_string_pretty(&audit_report)?
+        let genuine_report = ContractAuditor::audit_source(&target_name, &code_payload);
+        serde_json::to_string_pretty(&genuine_report)?
     };
 
     let receipt = TaskReceipt::create_and_sign(
@@ -130,45 +165,43 @@ pub async fn run_swarm_simulation(task_title: &str, bounty: u64, trigger_dispute
 
     println!("    • Execution Digest: {}", receipt.execution_digest.bright_cyan());
     println!("    • Ed25519 Signature: {}...", &receipt.signature[..32].bright_yellow());
-    println!("    • Real Audit Output:\n{}", receipt.output_payload.italic());
+    println!("    • Signed Payload Summary:\n{}", receipt.output_payload.italic());
 
     escrow.submit_receipt(receipt.clone(), task.challenge_window_seconds)?;
-    sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(600)).await;
 
-    // 5. Step 5: Optimistic Challenge Window & Multi-Agent Verification
-    log_step(5, "Optimistic Challenge Window & Sentinel Verification", "Independent Validator nodes review execution digest and payload integrity");
+    // 6. Step 5: Optimistic Challenge Window & Deterministic Re-Execution
+    log_step(5, "Optimistic Challenge Window & Deterministic Verification", "Independent Validator re-executes analysis kernel to mathematically verify output");
 
     let verification_result = SwarmVerifier::verify_work(&task, &receipt);
 
     match verification_result {
         Ok(_) => {
-            log_success("Validator Node: Cryptographic signature verified & output passed semantic validation!");
-            log_event("OPTIMISTIC WINDOW", "No disputes raised during the challenge period (15s). Ready for settlement.");
-            
-            // Release funds
+            log_success("Validator Node: Cryptographic signature verified & output passed independent re-execution!");
+            log_event("OPTIMISTIC WINDOW", "No disputes raised during challenge period. Finalizing settlement.");
+
             let status = escrow.finalize_settlement(task.id)?;
             ledger.deposit(&winning_bid.worker_id, bounty);
 
             log_step(6, "Autonomous Settlement Finality", "Smart contract releases bounty directly to Worker wallet");
             log_success(&format!("Payout of {} USDC transferred to [{}]", bounty, winning_bid.worker_id.bright_green().bold()));
-            println!("    • New Worker Beta Balance: {} USDC", ledger.balance_of(&worker_a_id).to_string().bright_green().bold());
+            println!("    • New Worker Balance: {} USDC", ledger.balance_of(&worker_a_id).to_string().bright_green().bold());
             println!("    • Escrow State: {:?}", status);
         }
         Err(e) => {
-            log_dispute(&format!("Validator Node Detected Fraud: {}", e));
+            log_dispute(&format!("Fraud Detected by Validator Node: {}", e));
             escrow.raise_dispute(task.id, e.to_string())?;
             let status = escrow.finalize_settlement(task.id)?;
-            
-            // Refund delegator, slash worker
+
             ledger.deposit(&delegator_id, bounty);
-            log_dispute("Worker penalised & Delegator fully refunded by Escrow contract!");
+            log_dispute("Worker slashed & Delegator fully refunded by Escrow contract!");
             println!("    • Delegator Refunded Balance: {} USDC", ledger.balance_of(&delegator_id).to_string().bright_yellow());
             println!("    • Escrow State: {:?}", status);
         }
     }
 
     println!("\n{}", "================================================================================".yellow());
-    println!("  {}", "🚀 HiveKernel Demo Completed Successfully!".bright_green().bold());
+    println!("  {}", "🚀 HiveKernel Execution Completed Successfully!".bright_green().bold());
     println!("{}", "================================================================================".yellow());
 
     Ok(())
