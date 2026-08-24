@@ -1,0 +1,20 @@
+[package]
+name = "hive-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+hive-core = { path = "../hive-core" }
+hive-p2p = { path = "../hive-p2p" }
+hive-escrow = { path = "../hive-escrow" }
+tokio = { workspace = true }
+clap = { workspace = true }
+colored = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
