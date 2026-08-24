@@ -62,24 +62,24 @@ impl ContractAuditor {
             }
 
             // Detect state mutation occurring after the external call
-            if external_call_found && line_num > call_line {
-                if (line.contains("=") || line.contains("-=") || line.contains("+="))
-                    && !line.contains("==")
-                    && !line.contains("!=")
-                    && !line.contains("<=")
-                    && !line.contains(">=")
-                {
-                    findings.push(VulnerabilityFinding {
-                        severity: "CRITICAL".to_string(),
-                        title: "Reentrancy Vulnerability (Checks-Effects-Interactions Violation)".to_string(),
-                        line_number: line_num,
-                        code_snippet: format!("Call at line {}: {}\nMutation at line {}: {}", call_line, lines[call_line - 1].trim(), line_num, trimmed),
-                        description: "State variable was modified after an external Ether transfer, enabling reentrant drains.".to_string(),
-                        recommendation: "Update state variables BEFORE external calls or inherit ReentrancyGuard.".to_string(),
-                    });
-                    security_score -= 45;
-                    external_call_found = false; // Reset to avoid duplicate flags
-                }
+            if external_call_found
+                && line_num > call_line
+                && (line.contains("=") || line.contains("-=") || line.contains("+="))
+                && !line.contains("==")
+                && !line.contains("!=")
+                && !line.contains("<=")
+                && !line.contains(">=")
+            {
+                findings.push(VulnerabilityFinding {
+                    severity: "CRITICAL".to_string(),
+                    title: "Reentrancy Vulnerability (Checks-Effects-Interactions Violation)".to_string(),
+                    line_number: line_num,
+                    code_snippet: format!("Call at line {}: {}\nMutation at line {}: {}", call_line, lines[call_line - 1].trim(), line_num, trimmed),
+                    description: "State variable was modified after an external Ether transfer, enabling reentrant drains.".to_string(),
+                    recommendation: "Update state variables BEFORE external calls or inherit ReentrancyGuard.".to_string(),
+                });
+                security_score -= 45;
+                external_call_found = false; // Reset to avoid duplicate flags
             }
 
             // 3. Check for Unchecked Call Return Values

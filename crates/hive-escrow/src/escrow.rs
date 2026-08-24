@@ -20,6 +20,7 @@ pub struct EscrowRecord {
 }
 
 /// In-Memory Optimistic Escrow Manager
+#[derive(Debug, Default)]
 pub struct EscrowManager {
     records: HashMap<TaskId, EscrowRecord>,
 }

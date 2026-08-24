@@ -28,11 +28,7 @@ impl AuctionMatcher {
     }
 
     fn compute_score(bid: &CandidateBid, max_bounty: u64) -> u64 {
-        let price_factor = if bid.bid_bounty > 0 {
-            (max_bounty * 100) / bid.bid_bounty
-        } else {
-            100
-        };
+        let price_factor = (max_bounty * 100).checked_div(bid.bid_bounty).unwrap_or(100);
         let rep_factor = bid.reputation_score as u64;
         let latency_penalty = (bid.estimated_duration_ms / 100).max(1);
 

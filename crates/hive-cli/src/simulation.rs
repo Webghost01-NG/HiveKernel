@@ -28,14 +28,14 @@ pub async fn run_swarm_simulation(
 ) -> anyhow::Result<()> {
     print_banner();
 
-    // 1. Resolve Code Payload
+    // 1. Resolve Code Payload & Target Name
     let (target_name, code_payload) = match file_path {
         Some(path) => {
             let content = fs::read_to_string(path)?;
             let file_name = Path::new(path)
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("Contract.sol");
+                .unwrap_or(task_title);
             (file_name.to_string(), content)
         }
         None => {
@@ -56,7 +56,7 @@ contract LiquidityVault {
     }
 }
 "#;
-            ("LiquidityVault.sol".to_string(), default_contract.to_string())
+            (task_title.to_string(), default_contract.to_string())
         }
     };
 
@@ -164,7 +164,7 @@ contract LiquidityVault {
     );
 
     println!("    • Execution Digest: {}", receipt.execution_digest.bright_cyan());
-    println!("    • Ed25519 Signature: {}...", &receipt.signature[..32].bright_yellow());
+    println!("    • Ed25519 Signature: {}...", receipt.signature[..32].bright_yellow());
     println!("    • Signed Payload Summary:\n{}", receipt.output_payload.italic());
 
     escrow.submit_receipt(receipt.clone(), task.challenge_window_seconds)?;
