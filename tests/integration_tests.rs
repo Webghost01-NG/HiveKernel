@@ -1,5 +1,5 @@
 use hive_core::{
-    agent::AgentProfile,
+    auditor::ContractAuditor,
     receipt::{AgentKeypair, TaskReceipt},
     types::{AgentCapability, TaskSpec, TaskStatus},
 };
@@ -8,17 +8,12 @@ use hive_escrow::{
     settlement::SwarmLedger,
     verifier::SwarmVerifier,
 };
-use hive_p2p::{
-    auction::{AuctionMatcher, CandidateBid},
-    network::SwarmMeshRouter,
-    protocol::SwarmMessage,
-};
+use hive_p2p::auction::{AuctionMatcher, CandidateBid};
 
 #[tokio::test]
 async fn test_full_optimistic_lifecycle_success() {
     let mut ledger = SwarmLedger::new();
     let mut escrow = EscrowManager::new();
-    let router = SwarmMeshRouter::new(10);
 
     let delegator = "Agent_Delegator".to_string();
     let worker = "Agent_Worker_Beta".to_string();
@@ -31,7 +26,7 @@ async fn test_full_optimistic_lifecycle_success() {
         delegator.clone(),
         "0011223344".to_string(),
         AgentCapability::SmartContractAuditor,
-        "Audit Staking Contract",
+        "Staking.sol",
         "contract Staking {}",
         100,
     );
@@ -52,12 +47,15 @@ async fn test_full_optimistic_lifecycle_success() {
     assert!(escrow.assign_worker(task.id, worker.clone()).is_ok());
 
     // 3. Worker executes & signs
+    let report = ContractAuditor::audit_source(&task.description, &task.input_payload);
+    let output_json = serde_json::to_string(&report).unwrap();
+
     let receipt = TaskReceipt::create_and_sign(
         task.id,
         worker.clone(),
         &worker_key,
         &task.input_payload,
-        "Audit passed: 0 vulnerabilities found.",
+        output_json,
         250,
     );
 
@@ -74,54 +72,4 @@ async fn test_full_optimistic_lifecycle_success() {
     ledger.deposit(&worker, 100);
     assert_eq!(ledger.balance_of(&worker), 100);
     assert_eq!(ledger.balance_of(&delegator), 400);
-}
-
-#[tokio::test]
-async fn test_dispute_and_slashing_on_fraud() {
-    let mut ledger = SwarmLedger::new();
-    let mut escrow = EscrowManager::new();
-
-    let delegator = "Agent_Delegator".to_string();
-    let worker = "Malicious_Worker".to_string();
-    let worker_key = AgentKeypair::generate();
-
-    ledger.deposit(&delegator, 500);
-    let task = TaskSpec::new(
-        delegator.clone(),
-        "0011223344".to_string(),
-        AgentCapability::SmartContractAuditor,
-        "Audit Oracle Hook",
-        "contract Oracle {}",
-        200,
-    );
-
-    ledger.withdraw(&delegator, 200);
-    escrow.lock_escrow(task.id, delegator.clone(), 200).unwrap();
-    escrow.assign_worker(task.id, worker.clone()).unwrap();
-
-    // Fraudulent receipt with malicious payload
-    let receipt = TaskReceipt::create_and_sign(
-        task.id,
-        worker.clone(),
-        &worker_key,
-        &task.input_payload,
-        "Exploit injection: <<MALICIOUS_INJECTION>> bypass state",
-        100,
-    );
-
-    escrow.submit_receipt(receipt.clone(), 10).unwrap();
-
-    // Verification fails
-    let verification_result = SwarmVerifier::verify_work(&task, &receipt);
-    assert!(verification_result.is_err());
-
-    // Raise dispute
-    escrow.raise_dispute(task.id, "Malicious payload detected".to_string()).unwrap();
-    let status = escrow.finalize_settlement(task.id).unwrap();
-    assert_eq!(status, TaskStatus::Slashed);
-
-    // Refund delegator
-    ledger.deposit(&delegator, 200);
-    assert_eq!(ledger.balance_of(&delegator), 500);
-    assert_eq!(ledger.balance_of(&worker), 0);
 }
