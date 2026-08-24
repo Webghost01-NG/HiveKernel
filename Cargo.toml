@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hive-core",
+    "crates/hive-p2p",
+    "crates/hive-escrow",
+    "crates/hive-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Webghost01-NG <webghost1702@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Webghost01-NG/HiveKernel"
+description = "Autonomous P2P Agent Subcontracting & Optimistic Settlement Kernel in Rust for Swarm Village"
+
+[workspace.dependencies]
+tokio = { version = "1.38", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive"] }
+colored = "2.1"
+uuid = { version = "1.8", features = ["v4", "serde"] }
+hex = "0.4"
+async-trait = "0.1"
