@@ -42,6 +42,12 @@ impl ContractAuditor {
                 continue;
             }
 
+            // Reset call tracking when entering a new function boundary
+            if trimmed.starts_with("function ") || trimmed.starts_with("modifier ") || trimmed.starts_with("contract ") {
+                external_call_found = false;
+                call_line = 0;
+            }
+
             // 1. Check for tx.origin authentication vulnerability
             if line.contains("tx.origin") {
                 findings.push(VulnerabilityFinding {
@@ -61,7 +67,7 @@ impl ContractAuditor {
                 call_line = line_num;
             }
 
-            // Detect state mutation occurring after the external call
+            // Detect state mutation occurring after the external call within the same function
             if external_call_found
                 && line_num > call_line
                 && (line.contains("=") || line.contains("-=") || line.contains("+="))
@@ -79,7 +85,7 @@ impl ContractAuditor {
                     recommendation: "Update state variables BEFORE external calls or inherit ReentrancyGuard.".to_string(),
                 });
                 security_score -= 45;
-                external_call_found = false; // Reset to avoid duplicate flags
+                external_call_found = false; // Reset after recording finding
             }
 
             // 3. Check for Unchecked Call Return Values

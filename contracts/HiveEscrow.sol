@@ -107,15 +107,19 @@ contract HiveEscrow {
             task.status = TaskStatus.Slashed;
             uint256 refund = task.bounty;
             task.bounty = 0;
+            
             (bool success, ) = payable(task.delegator).call{value: refund}("");
             require(success, "Refund transfer failed");
+
             emit WorkerSlashed(taskId, task.delegator, refund);
         } else {
             task.status = TaskStatus.Settled;
             uint256 payout = task.bounty;
             task.bounty = 0;
+
             (bool success, ) = payable(task.worker).call{value: payout}("");
             require(success, "Payout transfer failed");
+
             emit TaskSettled(taskId, task.worker, payout);
         }
     }
