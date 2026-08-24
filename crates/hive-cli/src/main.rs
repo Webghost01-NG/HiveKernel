@@ -1,5 +1,6 @@
 mod display;
 mod simulation;
+mod web;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -20,6 +21,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Launch the interactive Web Mission Control Dashboard UI
+    Ui {
+        /// Network port to bind web dashboard
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+    },
+
     /// Run full multi-agent simulation (Delegator -> Reverse Auction -> Worker -> Validator Re-Execution -> Settlement)
     RunSwarm {
         /// Optional path to real Solidity/Rust contract file to audit
@@ -81,6 +89,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Ui { port } => {
+            web::start_web_dashboard(port).await?;
+        }
         Commands::RunSwarm { file, task, bounty } => {
             simulation::run_swarm_simulation(&task, file.as_deref(), bounty, false).await?;
         }
