@@ -1,6 +1,5 @@
 /target
 **/*.rs.bk
-Cargo.lock
 
 # IDE & OS files
 .idea/
@@ -12,3 +11,8 @@ Cargo.lock
 # Environment
 .env
 .env.local
+
+# Build artifacts
+out/
+cache/
+keystore/

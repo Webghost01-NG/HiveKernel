@@ -11,7 +11,7 @@ impl SwarmTcpClient {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut stream = TcpStream::connect(peer_addr).await?;
         let json = serde_json::to_string(msg)?;
-        
+
         stream.write_all(json.as_bytes()).await?;
         stream.write_all(b"\n").await?;
 

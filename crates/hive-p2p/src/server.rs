@@ -58,7 +58,9 @@ impl SwarmTcpNode {
                 let _ = tx.send(msg);
                 writer.write_all(b"{\"status\":\"ACK\"}\n").await?;
             } else {
-                writer.write_all(b"{\"error\":\"MALFORMED_FRAME\"}\n").await?;
+                writer
+                    .write_all(b"{\"error\":\"MALFORMED_FRAME\"}\n")
+                    .await?;
             }
             line.clear();
         }
