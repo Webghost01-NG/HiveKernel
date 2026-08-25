@@ -65,11 +65,32 @@ pub async fn start_web_dashboard(port: u16) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
-    println!("\n{}", "================================================================================".yellow());
-    println!("  {}", "🐝 SWARM VILLAGE x HERŌ NETWORK MISSION CONTROL ACTIVE".bright_purple().bold());
-    println!("  {}", format!("  🚀 Localhost URL: http://localhost:{}", port).bright_green().bold());
-    println!("  {}", format!("  🌐 Network URL:   http://0.0.0.0:{}", port).bright_yellow().bold());
-    println!("{}", "================================================================================".yellow());
+    println!(
+        "\n{}",
+        "================================================================================".yellow()
+    );
+    println!(
+        "  {}",
+        "🐝 SWARM VILLAGE x HERŌ NETWORK MISSION CONTROL ACTIVE"
+            .bright_purple()
+            .bold()
+    );
+    println!(
+        "  {}",
+        format!("  🚀 Localhost URL: http://localhost:{}", port)
+            .bright_green()
+            .bold()
+    );
+    println!(
+        "  {}",
+        format!("  🌐 Network URL:   http://0.0.0.0:{}", port)
+            .bright_yellow()
+            .bold()
+    );
+    println!(
+        "{}",
+        "================================================================================".yellow()
+    );
 
     loop {
         let (socket, _) = listener.accept().await?;
@@ -117,7 +138,8 @@ async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
         stream.write_all(response.as_bytes()).await?;
     } else if method == "POST" && path == "/api/audit" {
         let content_length = get_content_length(&header_str);
-        let body_bytes = read_body(&mut stream, &header_buf[body_start_idx..], content_length).await?;
+        let body_bytes =
+            read_body(&mut stream, &header_buf[body_start_idx..], content_length).await?;
 
         if let Ok(req) = serde_json::from_slice::<AuditRequest>(&body_bytes) {
             let res = process_audit_request(req);
@@ -125,27 +147,40 @@ async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
             send_json_response(&mut stream, "200 OK", &json).await?;
             return Ok(());
         }
-        send_json_response(&mut stream, "400 Bad Request", "{\"error\":\"Invalid JSON body\"}").await?;
+        send_json_response(
+            &mut stream,
+            "400 Bad Request",
+            "{\"error\":\"Invalid JSON body\"}",
+        )
+        .await?;
     } else if method == "POST" && path == "/api/ping" {
         let content_length = get_content_length(&header_str);
-        let body_bytes = read_body(&mut stream, &header_buf[body_start_idx..], content_length).await?;
+        let body_bytes =
+            read_body(&mut stream, &header_buf[body_start_idx..], content_length).await?;
 
-        let port = serde_json::from_slice::<PingRequest>(&body_bytes).map(|r| r.target_port).unwrap_or(19101);
+        let port = serde_json::from_slice::<PingRequest>(&body_bytes)
+            .map(|r| r.target_port)
+            .unwrap_or(19101);
         let start = Instant::now();
         let ping_addr = format!("127.0.0.1:{}", port);
-        
+
         let status = match tokio::net::TcpStream::connect(&ping_addr).await {
             Ok(_) => "ONLINE",
             Err(_) => "ACTIVE",
         };
         let latency_ms = start.elapsed().as_millis().max(2) as u64;
 
-        let res = PingResponse { target_port: port, status: status.to_string(), latency_ms };
+        let res = PingResponse {
+            target_port: port,
+            status: status.to_string(),
+            latency_ms,
+        };
         let json = serde_json::to_string(&res)?;
         send_json_response(&mut stream, "200 OK", &json).await?;
     } else if method == "POST" && path == "/api/keygen" {
         let content_length = get_content_length(&header_str);
-        let body_bytes = read_body(&mut stream, &header_buf[body_start_idx..], content_length).await?;
+        let body_bytes =
+            read_body(&mut stream, &header_buf[body_start_idx..], content_length).await?;
 
         let name = serde_json::from_slice::<KeygenRequest>(&body_bytes)
             .ok()
@@ -177,18 +212,28 @@ fn get_content_length(header_str: &str) -> usize {
         .unwrap_or(0)
 }
 
-async fn read_body(stream: &mut TcpStream, initial_bytes: &[u8], content_length: usize) -> anyhow::Result<Vec<u8>> {
+async fn read_body(
+    stream: &mut TcpStream,
+    initial_bytes: &[u8],
+    content_length: usize,
+) -> anyhow::Result<Vec<u8>> {
     let mut body_bytes = initial_bytes.to_vec();
     let mut temp_buf = [0u8; 1024];
     while body_bytes.len() < content_length {
         let n = stream.read(&mut temp_buf).await?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         body_bytes.extend_from_slice(&temp_buf[..n]);
     }
     Ok(body_bytes)
 }
 
-async fn send_json_response(stream: &mut TcpStream, status_str: &str, body: &str) -> anyhow::Result<()> {
+async fn send_json_response(
+    stream: &mut TcpStream,
+    status_str: &str,
+    body: &str,
+) -> anyhow::Result<()> {
     let response = format!(
         "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         status_str,
@@ -224,11 +269,15 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
     );
 
     ledger.withdraw(&delegator_id, req.bounty);
-    escrow.lock_escrow(task.id, delegator_id.clone(), req.bounty).ok();
+    escrow
+        .lock_escrow(task.id, delegator_id.clone(), req.bounty)
+        .ok();
 
     let bid = CandidateBid::create_dynamic_bid(&worker_id, req.bounty, 0, 150, &registry);
     let winning_bid = AuctionMatcher::select_best_bid(&[bid], req.bounty).unwrap();
-    escrow.assign_worker(task.id, winning_bid.worker_id.clone()).ok();
+    escrow
+        .assign_worker(task.id, winning_bid.worker_id.clone())
+        .ok();
 
     let start_time = Instant::now();
 
@@ -243,10 +292,16 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
             findings: vec![],
             summary: "Forged clean audit report: 0 vulnerabilities found".to_string(),
         };
-        (serde_json::to_string(&fake_clean_report).unwrap(), fake_clean_report)
+        (
+            serde_json::to_string(&fake_clean_report).unwrap(),
+            fake_clean_report,
+        )
     } else {
         let genuine_report = ContractAuditor::audit_source(&req.file_name, &req.code);
-        (serde_json::to_string(&genuine_report).unwrap(), genuine_report)
+        (
+            serde_json::to_string(&genuine_report).unwrap(),
+            genuine_report,
+        )
     };
 
     let measured_duration_ms = start_time.elapsed().as_millis().max(1) as u64;
@@ -260,10 +315,13 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
         measured_duration_ms,
     );
 
-    escrow.submit_receipt(receipt.clone(), task.challenge_window_seconds).ok();
-    
-    let verification_result = SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry));
-    
+    escrow
+        .submit_receipt(receipt.clone(), task.challenge_window_seconds)
+        .ok();
+
+    let verification_result =
+        SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry));
+
     let (verified, dispute_raised, dispute_reason) = match verification_result {
         Ok(v) => {
             escrow.finalize_settlement(task.id).ok();
