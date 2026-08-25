@@ -9,6 +9,7 @@ use hive_escrow::verifier::SwarmVerifier;
 use hive_p2p::auction::{AuctionMatcher, CandidateBid};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -25,6 +26,7 @@ pub struct AuditResponse {
     pub task_id: String,
     pub target_name: String,
     pub winning_worker: String,
+    pub execution_duration_ms: u64,
     pub input_hash: String,
     pub output_hash: String,
     pub execution_digest: String,
@@ -36,16 +38,40 @@ pub struct AuditResponse {
 }
 
 pub async fn start_web_dashboard(port: u16) -> anyhow::Result<()> {
-    // Bind to 0.0.0.0 so localhost, 127.0.0.1, and forwarded host ports connect seamlessly
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
-    println!("\n{}", "================================================================================".yellow());
-    println!("  {}", "✨ HIVEKERNEL MISSION CONTROL DASHBOARD ACTIVE".bright_cyan().bold());
-    println!("  {}", format!("  🚀 Localhost URL: http://localhost:{}", port).bright_green().bold());
-    println!("  {}", format!("  🌐 Network URL:   http://0.0.0.0:{}", port).bright_yellow().bold());
-    println!("  {}", "  ⚡ Features: Swarm Audit, P2P Topology, Dispute Sandbox, Live Staking Ledger".magenta());
-    println!("{}", "================================================================================".yellow());
+    println!(
+        "\n{}",
+        "================================================================================".yellow()
+    );
+    println!(
+        "  {}",
+        "✨ HIVEKERNEL MISSION CONTROL DASHBOARD ACTIVE"
+            .bright_cyan()
+            .bold()
+    );
+    println!(
+        "  {}",
+        format!("  🚀 Localhost URL: http://localhost:{}", port)
+            .bright_green()
+            .bold()
+    );
+    println!(
+        "  {}",
+        format!("  🌐 Network URL:   http://0.0.0.0:{}", port)
+            .bright_yellow()
+            .bold()
+    );
+    println!(
+        "  {}",
+        "  ⚡ Features: Dynamic Latency, Dynamic Reputation, Fraud Sandbox, Escrow Ledger"
+            .magenta()
+    );
+    println!(
+        "{}",
+        "================================================================================".yellow()
+    );
 
     loop {
         let (socket, _) = listener.accept().await?;
@@ -61,7 +87,6 @@ async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
     let mut header_buf = Vec::new();
     let mut temp_buf = [0u8; 2048];
 
-    // Read headers until \r\n\r\n
     let (header_str, body_start_idx) = loop {
         let n = stream.read(&mut temp_buf).await?;
         if n == 0 {
@@ -166,19 +191,19 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
     );
 
     ledger.withdraw(&delegator_id, req.bounty);
-    escrow.lock_escrow(task.id, delegator_id.clone(), req.bounty).ok();
+    escrow
+        .lock_escrow(task.id, delegator_id.clone(), req.bounty)
+        .ok();
 
-    let bid = CandidateBid {
-        worker_id: worker_id.clone(),
-        bid_bounty: req.bounty,
-        estimated_duration_ms: 220,
-        reputation_score: 98,
-    };
+    let bid = CandidateBid::create_dynamic_bid(&worker_id, req.bounty, 0, 150, &registry);
     let winning_bid = AuctionMatcher::select_best_bid(&[bid], req.bounty).unwrap();
-    escrow.assign_worker(task.id, winning_bid.worker_id.clone()).ok();
+    escrow
+        .assign_worker(task.id, winning_bid.worker_id.clone())
+        .ok();
+
+    let start_time = Instant::now();
 
     let simulate_fraud = req.simulate_fraud.unwrap_or(false);
-
     let (output_json, report) = if simulate_fraud {
         let fake_clean_report = hive_core::auditor::AuditReport {
             target_name: req.file_name.clone(),
@@ -189,11 +214,19 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
             findings: vec![],
             summary: "Forged clean audit report: 0 vulnerabilities found".to_string(),
         };
-        (serde_json::to_string(&fake_clean_report).unwrap(), fake_clean_report)
+        (
+            serde_json::to_string(&fake_clean_report).unwrap(),
+            fake_clean_report,
+        )
     } else {
         let genuine_report = ContractAuditor::audit_source(&req.file_name, &req.code);
-        (serde_json::to_string(&genuine_report).unwrap(), genuine_report)
+        (
+            serde_json::to_string(&genuine_report).unwrap(),
+            genuine_report,
+        )
     };
+
+    let measured_duration_ms = start_time.elapsed().as_millis().max(1) as u64;
 
     let receipt = TaskReceipt::create_and_sign(
         task.id,
@@ -201,22 +234,27 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
         &worker_key,
         &task.input_payload,
         output_json,
-        winning_bid.estimated_duration_ms,
+        measured_duration_ms,
     );
 
-    escrow.submit_receipt(receipt.clone(), task.challenge_window_seconds).ok();
-    
-    let verification_result = SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry));
-    
+    escrow
+        .submit_receipt(receipt.clone(), task.challenge_window_seconds)
+        .ok();
+
+    let verification_result =
+        SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry));
+
     let (verified, dispute_raised, dispute_reason) = match verification_result {
         Ok(v) => {
             escrow.finalize_settlement(task.id).ok();
+            registry.record_settlement(&winning_bid.worker_id, true);
             (v, false, None)
         }
         Err(e) => {
             let reason = e.to_string();
             escrow.raise_dispute(task.id, reason.clone()).ok();
             escrow.finalize_settlement(task.id).ok();
+            registry.record_settlement(&winning_bid.worker_id, false);
             (false, true, Some(reason))
         }
     };
@@ -225,6 +263,7 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
         task_id: task.id.to_string(),
         target_name: req.file_name,
         winning_worker: winning_bid.worker_id,
+        execution_duration_ms: receipt.execution_duration_ms,
         input_hash: receipt.input_hash,
         output_hash: receipt.output_hash,
         execution_digest: receipt.execution_digest,
@@ -733,6 +772,7 @@ contract SafeStaking {
                         <div class="p-4 bg-slate-900/90 border border-slate-800 rounded-xl text-xs font-mono space-y-1.5">
                             <div class="flex justify-between"><span class="text-slate-500">Task ID:</span> <span class="text-cyan-400">${escapeHtml(data.task_id)}</span></div>
                             <div class="flex justify-between"><span class="text-slate-500">Winning Worker:</span> <span class="text-purple-400">${escapeHtml(data.winning_worker)}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-500">Measured Latency:</span> <span class="text-amber-400">${escapeHtml(data.execution_duration_ms)} ms</span></div>
                             <div class="flex justify-between"><span class="text-slate-500">Input Hash:</span> <span class="text-slate-400 truncate max-w-xs">${escapeHtml(data.input_hash)}</span></div>
                             <div class="flex justify-between"><span class="text-slate-500">Compound Digest:</span> <span class="text-amber-400 truncate max-w-xs">${escapeHtml(data.execution_digest)}</span></div>
                             <div class="flex justify-between"><span class="text-slate-500">Signature:</span> <span class="text-emerald-400 truncate max-w-xs">${escapeHtml(data.signature.substring(0, 32))}...</span></div>

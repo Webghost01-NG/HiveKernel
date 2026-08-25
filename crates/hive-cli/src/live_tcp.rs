@@ -8,7 +8,7 @@ use hive_core::{
 };
 use hive_escrow::verifier::SwarmVerifier;
 use hive_p2p::{client::SwarmTcpClient, protocol::SwarmMessage, server::SwarmTcpNode};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 pub async fn run_live_tcp_swarm(
@@ -117,15 +117,12 @@ pub async fn run_live_tcp_swarm(
     );
 
     let received_rfq = worker_rx.recv().await?;
-    match &received_rfq {
-        SwarmMessage::TaskRfq(t) => {
-            println!(
-                "    • [DAEMON]  Worker parsed TaskRfq: ID [{}] | Bounty: {} USDC",
-                t.id.to_string().bright_cyan(),
-                t.max_bounty
-            );
-        }
-        _ => {}
+    if let SwarmMessage::TaskRfq(t) = &received_rfq {
+        println!(
+            "    • [DAEMON]  Worker parsed TaskRfq: ID [{}] | Bounty: {} USDC",
+            t.id.to_string().bright_cyan(),
+            t.max_bounty
+        );
     }
 
     sleep(Duration::from_millis(300)).await;
@@ -137,8 +134,10 @@ pub async fn run_live_tcp_swarm(
         "Executing static heuristic engine and binding SHA-256 digests with Ed25519",
     );
 
+    let start_time = Instant::now();
     let report = ContractAuditor::audit_source(target_name, code_payload);
     let output_json = serde_json::to_string(&report)?;
+    let measured_duration_ms = start_time.elapsed().as_millis().max(1) as u64;
 
     println!(
         "    • [ANALYSIS] Total Lines: {} | Vulnerabilities: {} | Score: {}/100",
@@ -163,9 +162,13 @@ pub async fn run_live_tcp_swarm(
         &worker_key,
         &task.input_payload,
         output_json,
-        180,
+        measured_duration_ms,
     );
 
+    println!(
+        "    • Measured Latency:       {} ms",
+        receipt.execution_duration_ms.to_string().bright_yellow()
+    );
     println!(
         "    • Input Hash (SHA256):    {}",
         receipt.input_hash.bright_yellow()

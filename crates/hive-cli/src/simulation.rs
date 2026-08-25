@@ -11,7 +11,7 @@ use hive_escrow::{escrow::EscrowManager, settlement::SwarmLedger, verifier::Swar
 use hive_p2p::auction::{AuctionMatcher, CandidateBid};
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 pub async fn run_swarm_simulation(
@@ -112,9 +112,9 @@ contract LiquidityVault {
         &validator_key.public_key_hex()[..16]
     );
 
-    sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(250)).await;
 
-    // 3. Step 2: Task Creation & Non-Custodial Escrow Locking
+    // 3. Task Creation & Escrow Locking
     log_step(
         2,
         "Task Creation & Non-Custodial Escrow",
@@ -153,38 +153,23 @@ contract LiquidityVault {
     );
     log_event("ESCROW", &format!("Locked {} USDC into Escrow", bounty));
 
-    sleep(Duration::from_millis(400)).await;
+    sleep(Duration::from_millis(300)).await;
 
-    // 4. Step 3: P2P Reverse Auction & Bid Ranking
-    log_step(
-        3,
-        "P2P Reverse Auction & Capability Matching",
-        "Specialist agents discover RFQ and submit competitive cryptographic bids",
-    );
+    // 4. Reverse Auction & Dynamic Bidding
+    log_step(3, "P2P Reverse Auction & Dynamic Bid Ranking", "Specialist agents discover RFQ and submit dynamic bids based on live latency and reputation");
 
-    let bid_a = CandidateBid {
-        worker_id: worker_beta_id.clone(),
-        bid_bounty: bounty,
-        estimated_duration_ms: 320,
-        reputation_score: 98,
-    };
-
-    let bid_b = CandidateBid {
-        worker_id: worker_gamma_id.clone(),
-        bid_bounty: bounty.saturating_sub(20).max(1),
-        estimated_duration_ms: 150,
-        reputation_score: 82,
-    };
+    let bid_a = CandidateBid::create_dynamic_bid(&worker_beta_id, bounty, 0, 180, &registry);
+    let bid_b = CandidateBid::create_dynamic_bid(&worker_gamma_id, bounty, 10, 120, &registry);
 
     println!(
-        "    • Bid from {}: Bounty {} USDC | Rep: {} | Est: {}ms",
+        "    • Bid from {}: Bounty {} USDC | Rep: {}/100 | Est: {}ms",
         worker_beta_id.bright_purple(),
         bid_a.bid_bounty,
         bid_a.reputation_score,
         bid_a.estimated_duration_ms
     );
     println!(
-        "    • Bid from {}: Bounty {} USDC | Rep: {} | Est: {}ms",
+        "    • Bid from {}: Bounty {} USDC | Rep: {}/100 | Est: {}ms",
         worker_gamma_id.bright_purple(),
         bid_b.bid_bounty,
         bid_b.reputation_score,
@@ -198,24 +183,24 @@ contract LiquidityVault {
     ));
 
     escrow.assign_worker(task.id, winning_bid.worker_id.clone())?;
-    sleep(Duration::from_millis(400)).await;
+    sleep(Duration::from_millis(300)).await;
 
-    // 5. Step 4: Autonomous Work Execution & Cryptographic Receipt Generation
+    // 5. Work Execution & Dynamic Latency Measurement
     log_step(
         4,
         "Autonomous Work Execution & Signed Receipt",
         "Assigned Worker executes deterministic static analysis and signs execution digest",
     );
 
-    // Select the keypair matching the actual winning worker
     let winning_worker_key = if winning_bid.worker_id == worker_beta_id {
         &worker_beta_key
     } else {
         &worker_gamma_key
     };
 
+    let start_time = Instant::now();
+
     let output_content = if trigger_dispute {
-        // Rogue Worker intentionally forges a clean report with 0 issues on vulnerable code
         let fake_clean_report = AuditReport {
             target_name: target_name.clone(),
             total_lines: code_payload.lines().count(),
@@ -231,13 +216,15 @@ contract LiquidityVault {
         serde_json::to_string_pretty(&genuine_report)?
     };
 
+    let measured_duration_ms = start_time.elapsed().as_millis().max(1) as u64;
+
     let receipt = TaskReceipt::create_and_sign(
         task.id,
         winning_bid.worker_id.clone(),
         winning_worker_key,
         &task.input_payload,
         output_content,
-        winning_bid.estimated_duration_ms,
+        measured_duration_ms,
     );
 
     println!(
@@ -249,6 +236,10 @@ contract LiquidityVault {
         receipt.worker_id.bright_purple()
     );
     println!(
+        "    • Execution Time Measured: {} ms",
+        receipt.execution_duration_ms.to_string().bright_yellow()
+    );
+    println!(
         "    • Input Hash (SHA256): {}",
         receipt.input_hash.bright_yellow()
     );
@@ -257,7 +248,7 @@ contract LiquidityVault {
         receipt.output_hash.bright_yellow()
     );
     println!(
-        "    • Compound Execution Digest: {}",
+        "    • Compound Digest: {}",
         receipt.execution_digest.bright_cyan()
     );
     println!(
@@ -266,9 +257,9 @@ contract LiquidityVault {
     );
 
     escrow.submit_receipt(receipt.clone(), task.challenge_window_seconds)?;
-    sleep(Duration::from_millis(400)).await;
+    sleep(Duration::from_millis(300)).await;
 
-    // 6. Step 5: Optimistic Challenge Window & Deterministic Re-Execution
+    // 6. Optimistic Verification & Reputation Update
     log_step(
         5,
         "Optimistic Challenge Window & Deterministic Verification",
@@ -289,11 +280,11 @@ contract LiquidityVault {
                 ),
             );
 
-            // Advance time past challenge window for settlement
             let settlement_time =
                 Utc::now() + ChronoDuration::seconds(task.challenge_window_seconds as i64 + 1);
             let status = escrow.finalize_settlement_at(task.id, settlement_time)?;
             ledger.deposit(&winning_bid.worker_id, bounty);
+            registry.record_settlement(&winning_bid.worker_id, true);
 
             log_step(
                 6,
@@ -314,6 +305,13 @@ contract LiquidityVault {
                     .bright_green()
                     .bold()
             );
+            println!(
+                "    • Updated Reputation Score: {}/100",
+                registry
+                    .get_reputation(&winning_bid.worker_id)
+                    .to_string()
+                    .bright_cyan()
+            );
             println!("    • Escrow State: {:?}", status);
         }
         Err(e) => {
@@ -325,10 +323,19 @@ contract LiquidityVault {
             let status = escrow.finalize_settlement_at(task.id, settlement_time)?;
 
             ledger.deposit(&delegator_id, bounty);
+            registry.record_settlement(&winning_bid.worker_id, false);
+
             log_dispute("Worker slashed & Delegator fully refunded by Escrow!");
             println!(
                 "    • Delegator Refunded Balance: {} USDC",
                 ledger.balance_of(&delegator_id).to_string().bright_yellow()
+            );
+            println!(
+                "    • Worker Slashed Reputation: {}/100",
+                registry
+                    .get_reputation(&winning_bid.worker_id)
+                    .to_string()
+                    .bright_red()
             );
             println!("    • Escrow State: {:?}", status);
         }
