@@ -36,33 +36,16 @@ pub struct AuditResponse {
 }
 
 pub async fn start_web_dashboard(port: u16) -> anyhow::Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    // Bind to 0.0.0.0 so localhost, 127.0.0.1, and forwarded host ports connect seamlessly
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
-    println!(
-        "\n{}",
-        "================================================================================".yellow()
-    );
-    println!(
-        "  {}",
-        "✨ HIVEKERNEL ULTRA-SLEEK MISSION CONTROL DASHBOARD"
-            .bright_cyan()
-            .bold()
-    );
-    println!(
-        "  {}",
-        format!("  🚀 Live Web UI active at: http://localhost:{}", port)
-            .bright_green()
-            .bold()
-    );
-    println!(
-        "  {}",
-        "  ⚡ Features: Swarm Audit, P2P Topology, Dispute Sandbox, Live Staking Ledger".magenta()
-    );
-    println!(
-        "{}",
-        "================================================================================".yellow()
-    );
+    println!("\n{}", "================================================================================".yellow());
+    println!("  {}", "✨ HIVEKERNEL MISSION CONTROL DASHBOARD ACTIVE".bright_cyan().bold());
+    println!("  {}", format!("  🚀 Localhost URL: http://localhost:{}", port).bright_green().bold());
+    println!("  {}", format!("  🌐 Network URL:   http://0.0.0.0:{}", port).bright_yellow().bold());
+    println!("  {}", "  ⚡ Features: Swarm Audit, P2P Topology, Dispute Sandbox, Live Staking Ledger".magenta());
+    println!("{}", "================================================================================".yellow());
 
     loop {
         let (socket, _) = listener.accept().await?;
@@ -183,9 +166,7 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
     );
 
     ledger.withdraw(&delegator_id, req.bounty);
-    escrow
-        .lock_escrow(task.id, delegator_id.clone(), req.bounty)
-        .ok();
+    escrow.lock_escrow(task.id, delegator_id.clone(), req.bounty).ok();
 
     let bid = CandidateBid {
         worker_id: worker_id.clone(),
@@ -194,9 +175,7 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
         reputation_score: 98,
     };
     let winning_bid = AuctionMatcher::select_best_bid(&[bid], req.bounty).unwrap();
-    escrow
-        .assign_worker(task.id, winning_bid.worker_id.clone())
-        .ok();
+    escrow.assign_worker(task.id, winning_bid.worker_id.clone()).ok();
 
     let simulate_fraud = req.simulate_fraud.unwrap_or(false);
 
@@ -210,16 +189,10 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
             findings: vec![],
             summary: "Forged clean audit report: 0 vulnerabilities found".to_string(),
         };
-        (
-            serde_json::to_string(&fake_clean_report).unwrap(),
-            fake_clean_report,
-        )
+        (serde_json::to_string(&fake_clean_report).unwrap(), fake_clean_report)
     } else {
         let genuine_report = ContractAuditor::audit_source(&req.file_name, &req.code);
-        (
-            serde_json::to_string(&genuine_report).unwrap(),
-            genuine_report,
-        )
+        (serde_json::to_string(&genuine_report).unwrap(), genuine_report)
     };
 
     let receipt = TaskReceipt::create_and_sign(
@@ -231,13 +204,10 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
         winning_bid.estimated_duration_ms,
     );
 
-    escrow
-        .submit_receipt(receipt.clone(), task.challenge_window_seconds)
-        .ok();
-
-    let verification_result =
-        SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry));
-
+    escrow.submit_receipt(receipt.clone(), task.challenge_window_seconds).ok();
+    
+    let verification_result = SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry));
+    
     let (verified, dispute_raised, dispute_reason) = match verification_result {
         Ok(v) => {
             escrow.finalize_settlement(task.id).ok();
