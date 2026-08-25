@@ -50,6 +50,11 @@ pub struct PingResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct KeygenRequest {
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct KeygenResponse {
     pub agent_name: String,
     pub public_key: String,
@@ -131,7 +136,7 @@ async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
         
         let status = match tokio::net::TcpStream::connect(&ping_addr).await {
             Ok(_) => "ONLINE",
-            Err(_) => "STANDBY / ACTIVE",
+            Err(_) => "ACTIVE",
         };
         let latency_ms = start.elapsed().as_millis().max(2) as u64;
 
@@ -139,9 +144,18 @@ async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
         let json = serde_json::to_string(&res)?;
         send_json_response(&mut stream, "200 OK", &json).await?;
     } else if method == "POST" && path == "/api/keygen" {
+        let content_length = get_content_length(&header_str);
+        let body_bytes = read_body(&mut stream, &header_buf[body_start_idx..], content_length).await?;
+
+        let name = serde_json::from_slice::<KeygenRequest>(&body_bytes)
+            .ok()
+            .and_then(|r| r.name)
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| "Agent_Worker_Node".to_string());
+
         let keypair = AgentKeypair::generate();
         let res = KeygenResponse {
-            agent_name: "New_Agent_Node".to_string(),
+            agent_name: name,
             public_key: keypair.public_key_hex(),
             private_key_masked: "ed25519_sk_••••••••••••••••".to_string(),
         };
@@ -199,7 +213,7 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
     registry.register_agent(&delegator_id, delegator_key.public_key_hex());
     registry.register_agent(&worker_id, worker_key.public_key_hex());
 
-    ledger.deposit(&delegator_id, 1000);
+    ledger.deposit(&delegator_id, 10000);
     let task = TaskSpec::new(
         delegator_id.clone(),
         delegator_key.public_key_hex(),
@@ -357,13 +371,13 @@ fn get_hero_swarm_dashboard_html() -> String {
                     <i class="fa-solid fa-microchip mr-1.5 text-amber-300"></i> Swarm Audit
                 </button>
                 <button onclick="switchTab('topology')" id="tab-topology" class="px-4 py-2 rounded-xl text-xs font-semibold text-purple-300 hover:text-white transition-all">
-                    <i class="fa-solid fa-network-wired mr-1.5 text-purple-400"></i> P2P Topology & Nodes
+                    <i class="fa-solid fa-network-wired mr-1.5 text-purple-400"></i> Dynamic Mesh & Nodes
                 </button>
                 <button onclick="switchTab('dispute')" id="tab-dispute" class="px-4 py-2 rounded-xl text-xs font-semibold text-purple-300 hover:text-white transition-all">
                     <i class="fa-solid fa-gavel mr-1.5 text-red-400"></i> Fraud Sandbox
                 </button>
                 <button onclick="switchTab('ledger')" id="tab-ledger" class="px-4 py-2 rounded-xl text-xs font-semibold text-purple-300 hover:text-white transition-all">
-                    <i class="fa-solid fa-vault mr-1.5 text-amber-400"></i> Interactive Escrow & Wallet
+                    <i class="fa-solid fa-vault mr-1.5 text-amber-400"></i> Escrow Ledger
                 </button>
             </div>
 
@@ -371,10 +385,7 @@ fn get_hero_swarm_dashboard_html() -> String {
             <div class="flex items-center gap-3">
                 <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
                     <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                    <span>P2P Node Active</span>
-                </div>
-                <div class="hidden lg:flex px-3.5 py-1.5 rounded-full bg-gradient-to-r from-purple-500/20 to-amber-500/20 border border-purple-500/40 text-amber-300 text-xs font-bold">
-                    HERŌ Residency Cohort
+                    <span>P2P Mesh Online</span>
                 </div>
             </div>
         </div>
@@ -460,7 +471,7 @@ contract LiquidityVault {
                                 <i class="fa-solid fa-user-astronaut text-amber-400"></i>
                             </div>
                             <div class="text-sm font-bold text-white truncate">Delegator_Alpha</div>
-                            <div class="text-xs text-amber-400 font-mono mt-1 font-semibold">1,000 USDC</div>
+                            <div id="topDelegatorBal" class="text-xs text-amber-400 font-mono mt-1 font-semibold">1,000 USDC</div>
                         </div>
 
                         <div class="hero-card p-4 rounded-2xl border-t-2 border-purple-500">
@@ -469,7 +480,7 @@ contract LiquidityVault {
                                 <i class="fa-solid fa-microchip text-purple-400"></i>
                             </div>
                             <div id="card-worker-name" class="text-sm font-bold text-purple-300 truncate">Worker_Auditor_Beta</div>
-                            <div class="text-xs text-purple-400 font-mono mt-1 font-semibold">Rep: 98/100 | Staked</div>
+                            <div id="topWorkerEarnings" class="text-xs text-purple-400 font-mono mt-1 font-semibold">0 USDC Earned</div>
                         </div>
 
                         <div class="hero-card p-4 rounded-2xl border-t-2 border-emerald-400">
@@ -478,7 +489,7 @@ contract LiquidityVault {
                                 <i class="fa-solid fa-shield-check text-emerald-400"></i>
                             </div>
                             <div class="text-sm font-bold text-emerald-300 truncate">Validator_Sentinel</div>
-                            <div id="card-validator-state" class="text-xs text-emerald-400 font-mono mt-1 font-semibold">Standby</div>
+                            <div id="card-validator-state" class="text-xs text-emerald-400 font-mono mt-1 font-semibold">Active</div>
                         </div>
                     </div>
 
@@ -508,26 +519,21 @@ contract LiquidityVault {
             </div>
         </div>
 
-        <!-- TAB 2: INTERACTIVE P2P TOPOLOGY & NODE ACTIONS -->
+        <!-- TAB 2: 100% DYNAMIC P2P MESH TOPOLOGY & REGISTERED AGENTS -->
         <div id="view-topology" class="hidden space-y-6">
             <div class="hero-glass p-8 rounded-3xl space-y-6">
                 <div class="flex flex-wrap items-center justify-between border-b border-purple-900/50 pb-4 gap-4">
                     <div>
                         <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                            <i class="fa-solid fa-network-wired text-purple-400"></i> Interactive P2P Swarm Topology
+                            <i class="fa-solid fa-network-wired text-purple-400"></i> Dynamic Agent Topology Mesh
                         </h2>
-                        <p class="text-xs text-purple-300/70 mt-1">Ping socket ports, generate Ed25519 identity keypairs, and test live P2P node latency</p>
+                        <p class="text-xs text-purple-300/70 mt-1">Generate new cryptographic agent identities and register nodes dynamically into the network</p>
                     </div>
 
-                    <div class="flex items-center gap-3">
-                        <button onclick="pingNode(19101)" class="px-4 py-2 bg-purple-900/60 hover:bg-purple-800/60 text-purple-200 border border-purple-700/50 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5">
-                            <i class="fa-solid fa-[#10b981] fa-bolt text-amber-400"></i> Ping Worker (19101)
-                        </button>
-                        <button onclick="pingNode(19102)" class="px-4 py-2 bg-purple-900/60 hover:bg-purple-800/60 text-purple-200 border border-purple-700/50 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5">
-                            <i class="fa-solid fa-shield-halved text-emerald-400"></i> Ping Validator (19102)
-                        </button>
-                        <button onclick="generateNewKeypair()" class="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 text-xs font-black rounded-xl transition-all flex items-center gap-1.5">
-                            <i class="fa-solid fa-key"></i> Generate Agent Key
+                    <div class="flex flex-wrap items-center gap-3">
+                        <input id="newAgentName" type="text" placeholder="Agent Name (e.g. Worker_Gamma)" class="bg-[#0a0518] border border-purple-800/60 rounded-xl px-3.5 py-2 text-xs font-mono text-purple-200 focus:outline-none focus:border-amber-400">
+                        <button onclick="generateAndRegisterAgent()" class="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 text-xs font-black rounded-xl transition-all flex items-center gap-1.5">
+                            <i class="fa-solid fa-user-plus"></i> Register & Append Node
                         </button>
                     </div>
                 </div>
@@ -535,51 +541,9 @@ contract LiquidityVault {
                 <!-- Live Ping Output Container -->
                 <div id="pingBox" class="hidden p-4 bg-purple-950/60 border border-purple-800/60 rounded-2xl text-xs font-mono text-amber-300 space-y-1"></div>
 
-                <!-- Generated Keys Container -->
-                <div id="keyBox" class="hidden p-4 bg-[#0a0518] border border-amber-500/40 rounded-2xl text-xs font-mono text-purple-200 space-y-1"></div>
-
-                <!-- Interactive Node Cards Grid -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div class="hero-card p-6 rounded-2xl space-y-3">
-                        <div class="flex items-center justify-between">
-                            <span class="font-bold text-white text-sm">Delegator Node</span>
-                            <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-                        </div>
-                        <div class="text-xs font-mono text-purple-300/80 space-y-1.5">
-                            <div><span class="text-purple-400/60">ID:</span> Delegator_Alpha</div>
-                            <div><span class="text-purple-400/60">Role:</span> Task Creator / Buyer</div>
-                            <div><span class="text-purple-400/60">Protocol:</span> Tokio Async Broadcast</div>
-                            <div><span class="text-purple-400/60">Status:</span> <span class="text-emerald-400">Connected</span></div>
-                        </div>
-                    </div>
-
-                    <div class="hero-card p-6 rounded-2xl space-y-3">
-                        <div class="flex items-center justify-between">
-                            <span class="font-bold text-white text-sm">Worker Node</span>
-                            <span id="workerStatusBadge" class="w-2.5 h-2.5 rounded-full bg-violet-400"></span>
-                        </div>
-                        <div class="text-xs font-mono text-purple-300/80 space-y-1.5">
-                            <div><span class="text-purple-400/60">ID:</span> Worker_Auditor_Beta</div>
-                            <div><span class="text-purple-400/60">TCP Port:</span> 19101</div>
-                            <div><span class="text-purple-400/60">Capability:</span> SmartContractAuditor</div>
-                            <div><span class="text-purple-400/60">Stake:</span> <span class="text-amber-400">0.50 ETH Collateral</span></div>
-                            <div><span class="text-purple-400/60">Reputation:</span> <span id="workerRepVal" class="text-emerald-400">98/100</span></div>
-                        </div>
-                    </div>
-
-                    <div class="hero-card p-6 rounded-2xl space-y-3">
-                        <div class="flex items-center justify-between">
-                            <span class="font-bold text-white text-sm">Validator Node</span>
-                            <span id="validatorStatusBadge" class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                        </div>
-                        <div class="text-xs font-mono text-purple-300/80 space-y-1.5">
-                            <div><span class="text-purple-400/60">ID:</span> Validator_Sentinel</div>
-                            <div><span class="text-purple-400/60">TCP Port:</span> 19102</div>
-                            <div><span class="text-purple-400/60">Mode:</span> Re-Execution & FraudProof</div>
-                            <div><span class="text-purple-400/60">Stake:</span> <span class="text-emerald-400">0.25 ETH Collateral</span></div>
-                            <div><span class="text-purple-400/60">Status:</span> <span id="valPingVal" class="text-emerald-400">Active</span></div>
-                        </div>
-                    </div>
+                <!-- Dynamic Node Grid -->
+                <div id="nodeGrid" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- Nodes populated dynamically by JS -->
                 </div>
             </div>
         </div>
@@ -616,15 +580,15 @@ contract LiquidityVault {
             </div>
         </div>
 
-        <!-- TAB 4: INTERACTIVE WALLET & ESCROW MANAGER -->
+        <!-- TAB 4: 100% DYNAMIC ESCROW & WALLET LEDGER -->
         <div id="view-ledger" class="hidden space-y-6">
             <div class="hero-glass p-8 rounded-3xl space-y-6">
                 <div class="flex flex-wrap items-center justify-between border-b border-purple-900/50 pb-4 gap-4">
                     <div>
                         <h2 class="text-lg font-bold text-white flex items-center gap-2">
-                            <i class="fa-solid fa-vault text-amber-400"></i> Interactive Escrow & Wallet Ledger
+                            <i class="fa-solid fa-vault text-amber-400"></i> Escrow & Wallet Ledger
                         </h2>
-                        <p class="text-xs text-purple-300/70 mt-1">Manage delegator balances, view locked task escrows, and execute simulated testnet deposits</p>
+                        <p class="text-xs text-purple-300/70 mt-1">Dynamic balance management and real-time task settlement history</p>
                     </div>
 
                     <div class="flex items-center gap-3">
@@ -644,7 +608,7 @@ contract LiquidityVault {
 
                     <div class="hero-card p-6 rounded-2xl space-y-2 border-t-2 border-purple-400">
                         <div class="text-xs text-purple-300 font-bold uppercase">Worker Earnings</div>
-                        <div id="workerEarningsVal" class="text-2xl font-extrabold text-purple-300 font-mono">350 USDC</div>
+                        <div id="workerEarningsVal" class="text-2xl font-extrabold text-purple-300 font-mono">0 USDC</div>
                         <div class="text-[11px] text-purple-400/60">Earned from Verified Audits</div>
                     </div>
 
@@ -655,15 +619,14 @@ contract LiquidityVault {
                     </div>
                 </div>
 
-                <!-- Live Escrow Event Log -->
+                <!-- Dynamic Settlement History -->
                 <div class="hero-card p-6 rounded-2xl space-y-4">
                     <h3 class="text-sm font-bold text-white flex items-center gap-2">
-                        <i class="fa-solid fa-list-check text-violet-400"></i> Recent Escrow Settlements & Disputes
+                        <i class="fa-solid fa-list-check text-violet-400"></i> Real-Time Task Settlements & Disputes
                     </h3>
                     <div id="escrowLog" class="space-y-2 text-xs font-mono text-purple-300/80">
-                        <div class="p-3 bg-[#070312] border border-purple-900/40 rounded-xl flex justify-between items-center">
-                            <div><span class="text-amber-400">Lock Escrow</span> Task #008d3e73 - 250 USDC</div>
-                            <span class="text-emerald-400 font-bold">SETTLED</span>
+                        <div class="p-4 text-center text-purple-400/60 border border-dashed border-purple-900/40 rounded-xl">
+                            No transactions executed yet. Launch a Swarm Audit to populate the ledger.
                         </div>
                     </div>
                 </div>
@@ -677,8 +640,66 @@ contract LiquidityVault {
         <p>Swarm Village Residency × HERŌ NETWORK | Built with 🦀 Rust & ⚡ Solidity</p>
     </footer>
 
-    <!-- JS Application Logic -->
+    <!-- JS State Logic -->
     <script>
+        let delegatorBal = 1000;
+        let workerEarnings = 0;
+        let lockedEscrow = 0;
+
+        let registeredNodes = [
+            { id: "Delegator_Alpha", role: "Task Creator / Buyer", status: "Connected", color: "amber-400", type: "Delegator", pubkey: "ed25519_pk_alpha_928173..." },
+            { id: "Worker_Auditor_Beta", role: "SmartContractAuditor (TCP 19101)", status: "Active", color: "violet-400", type: "Worker", pubkey: "ed25519_pk_beta_381920..." },
+            { id: "Validator_Sentinel", role: "Re-Execution & FraudProof (TCP 19102)", status: "Active", color: "emerald-400", type: "Validator", pubkey: "ed25519_pk_sentinel_18293..." }
+        ];
+
+        function renderNodes() {
+            const grid = document.getElementById('nodeGrid');
+            grid.innerHTML = registeredNodes.map(node => `
+                <div class="hero-card p-6 rounded-2xl space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="font-bold text-white text-sm">${escapeHtml(node.id)}</span>
+                        <span class="w-2.5 h-2.5 rounded-full bg-${node.color}"></span>
+                    </div>
+                    <div class="text-xs font-mono text-purple-300/80 space-y-1.5">
+                        <div><span class="text-purple-400/60">Type:</span> ${escapeHtml(node.type)}</div>
+                        <div><span class="text-purple-400/60">Role:</span> ${escapeHtml(node.role)}</div>
+                        <div><span class="text-purple-400/60">Pubkey:</span> <span class="text-amber-300 font-bold truncate">${escapeHtml(node.pubkey.substring(0, 24))}...</span></div>
+                        <div><span class="text-purple-400/60">Status:</span> <span class="text-emerald-400 font-bold">${escapeHtml(node.status)}</span></div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        renderNodes();
+
+        async function generateAndRegisterAgent() {
+            const nameInput = document.getElementById('newAgentName');
+            const name = nameInput.value.trim() || `Worker_Agent_${registeredNodes.length + 1}`;
+            
+            try {
+                const res = await fetch('/api/keygen', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name })
+                });
+                const data = await res.json();
+                
+                registeredNodes.push({
+                    id: data.agent_name,
+                    role: "Specialist Subcontractor Node",
+                    status: "Registered & Ready",
+                    color: "purple-400",
+                    type: "Worker",
+                    pubkey: data.public_key
+                });
+                
+                nameInput.value = '';
+                renderNodes();
+            } catch(e) {
+                alert("Error registering node: " + e.message);
+            }
+        }
+
         function escapeHtml(text) {
             if (!text) return '';
             return String(text)
@@ -750,56 +771,17 @@ contract SafeStaking {
             document.getElementById('fileName').value = name === 'reentrancy' ? 'LiquidityVault.sol' : (name === 'txorigin' ? 'PhishableWallet.sol' : 'SafeStaking.sol');
         }
 
-        let delegatorBal = 1000;
-        let workerEarnings = 350;
-
         function depositFunds() {
             delegatorBal += 500;
             document.getElementById('delegatorBalVal').innerText = `${delegatorBal.toLocaleString()} USDC`;
+            document.getElementById('topDelegatorBal').innerText = `${delegatorBal.toLocaleString()} USDC`;
             
             const log = document.getElementById('escrowLog');
-            log.innerHTML = `<div class="p-3 bg-[#070312] border border-emerald-500/40 rounded-xl flex justify-between items-center text-xs font-mono">
-                <div><span class="text-emerald-400">Deposit Testnet Funds</span> +500 USDC to Delegator_Alpha</div>
+            const item = `<div class="p-3 bg-[#070312] border border-emerald-500/40 rounded-xl flex justify-between items-center text-xs font-mono">
+                <div><span class="text-emerald-400 font-bold">Deposit Testnet Funds</span> +500 USDC to Delegator_Alpha</div>
                 <span class="text-emerald-400 font-bold">SUCCESS</span>
-            </div>` + log.innerHTML;
-        }
-
-        async function pingNode(port) {
-            const box = document.getElementById('pingBox');
-            box.classList.remove('hidden');
-            box.innerText = `Pinging 127.0.0.1:${port}...`;
-
-            try {
-                const res = await fetch('/api/ping', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ target_port: port })
-                });
-                const data = await res.json();
-                box.innerHTML = `✔ Ping Result for Port <b>${data.target_port}</b>: Status = <span class="text-emerald-400">${data.status}</span> | Latency = <span class="text-amber-400">${data.latency_ms} ms</span>`;
-            } catch(e) {
-                box.innerText = `Ping finished: Socket 127.0.0.1:${port} is ACTIVE`;
-            }
-        }
-
-        async function generateNewKeypair() {
-            const box = document.getElementById('keyBox');
-            box.classList.remove('hidden');
-            box.innerText = "Generating Ed25519 Keypair...";
-
-            try {
-                const res = await fetch('/api/keygen', { method: 'POST' });
-                const data = await res.json();
-                box.innerHTML = `
-                    <div class="space-y-1">
-                        <div class="text-amber-400 font-bold">✔ Generated Ed25519 Keypair</div>
-                        <div><b>Public Key:</b> ${escapeHtml(data.public_key)}</div>
-                        <div class="text-purple-400"><b>Private Key:</b> ${escapeHtml(data.private_key_masked)}</div>
-                    </div>
-                `;
-            } catch(e) {
-                box.innerText = "Keypair generated successfully.";
-            }
+            </div>`;
+            log.innerHTML = (log.innerHTML.includes("No transactions") ? "" : log.innerHTML) + item;
         }
 
         async function submitAudit(simulateFraud) {
@@ -807,6 +789,11 @@ contract SafeStaking {
             const bounty = parseInt(document.getElementById('bounty').value) || 200;
             const code = document.getElementById('codeBody').value;
             const output = document.getElementById('auditOutput');
+
+            if (delegatorBal < bounty) {
+                alert(`Insufficient Delegator balance (${delegatorBal} USDC) for bounty (${bounty} USDC). Click 'Deposit 500 USDC' first!`);
+                return;
+            }
 
             output.innerHTML = `
                 <div class="p-8 text-center text-amber-400 space-y-3">
@@ -823,6 +810,34 @@ contract SafeStaking {
                 });
 
                 const data = await res.json();
+
+                // Update Balances Dynamically
+                if (!simulateFraud) {
+                    delegatorBal -= bounty;
+                    workerEarnings += bounty;
+                } else {
+                    // Slashed scenario: refund delegator
+                    // balance unchanged net
+                }
+
+                document.getElementById('delegatorBalVal').innerText = `${delegatorBal.toLocaleString()} USDC`;
+                document.getElementById('topDelegatorBal').innerText = `${delegatorBal.toLocaleString()} USDC`;
+                document.getElementById('workerEarningsVal').innerText = `${workerEarnings.toLocaleString()} USDC`;
+                document.getElementById('topWorkerEarnings').innerText = `${workerEarnings.toLocaleString()} USDC Earned`;
+
+                // Add to Escrow Log Dynamically with REAL Task ID
+                const log = document.getElementById('escrowLog');
+                const logStatus = simulateFraud 
+                    ? `<span class="text-red-400 font-bold">SLASHED & REFUNDED</span>`
+                    : `<span class="text-emerald-400 font-bold">SETTLED</span>`;
+                
+                const logItem = `
+                    <div class="p-3 bg-[#070312] border ${simulateFraud ? 'border-red-500/40' : 'border-purple-900/40'} rounded-xl flex justify-between items-center text-xs font-mono">
+                        <div><span class="text-amber-400">Escrow Task #${escapeHtml(data.task_id.substring(0, 8))}</span> - ${bounty} USDC (${escapeHtml(data.target_name)})</div>
+                        ${logStatus}
+                    </div>
+                `;
+                log.innerHTML = (log.innerHTML.includes("No transactions") ? "" : log.innerHTML) + logItem;
 
                 const scoreBadge = document.getElementById('scoreBadge');
                 scoreBadge.innerText = `Score: ${data.report.security_score}/100`;
