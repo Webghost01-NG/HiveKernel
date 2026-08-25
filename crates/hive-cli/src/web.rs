@@ -1,6 +1,7 @@
 use colored::*;
 use hive_core::auditor::ContractAuditor;
 use hive_core::receipt::{AgentKeypair, TaskReceipt};
+use hive_core::registry::AgentRegistry;
 use hive_core::types::{AgentCapability, TaskSpec};
 use hive_escrow::escrow::EscrowManager;
 use hive_escrow::settlement::SwarmLedger;
@@ -32,12 +33,32 @@ pub struct AuditResponse {
 pub async fn start_web_dashboard(port: u16) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr).await?;
-    
-    println!("\n{}", "================================================================================".yellow());
-    println!("  {}", "🌐 HIVEKERNEL MULTI-AGENT MISSION CONTROL WEB UI".bright_cyan().bold());
-    println!("  {}", format!("  Access Live Dashboard at: http://localhost:{}", port).bright_green().bold());
-    println!("  {}", "  Supported Features: Real-time Swarm Audits, File Drag & Drop, Fraud Proofs".magenta());
-    println!("{}", "================================================================================".yellow());
+
+    println!(
+        "\n{}",
+        "================================================================================".yellow()
+    );
+    println!(
+        "  {}",
+        "🌐 HIVEKERNEL MULTI-AGENT MISSION CONTROL WEB UI"
+            .bright_cyan()
+            .bold()
+    );
+    println!(
+        "  {}",
+        format!("  Access Live Dashboard at: http://localhost:{}", port)
+            .bright_green()
+            .bold()
+    );
+    println!(
+        "  {}",
+        "  Supported Features: Real-time Swarm Audits, XSS-Sanitized Findings, Fraud Proofs"
+            .magenta()
+    );
+    println!(
+        "{}",
+        "================================================================================".yellow()
+    );
 
     loop {
         let (socket, _) = listener.accept().await?;
@@ -50,13 +71,25 @@ pub async fn start_web_dashboard(port: u16) -> anyhow::Result<()> {
 }
 
 async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
-    let mut buffer = [0u8; 16384];
-    let bytes_read = stream.read(&mut buffer).await?;
-    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let mut header_buf = Vec::new();
+    let mut temp_buf = [0u8; 1024];
 
-    let first_line = request.lines().next().unwrap_or("");
+    // Read headers until \r\n\r\n
+    let (header_str, body_start_idx) = loop {
+        let n = stream.read(&mut temp_buf).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        header_buf.extend_from_slice(&temp_buf[..n]);
+
+        if let Some(pos) = header_buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let header_str = String::from_utf8_lossy(&header_buf[..pos]).to_string();
+            break (header_str, pos + 4);
+        }
+    };
+
+    let first_line = header_str.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
-
     if parts.len() < 2 {
         return Ok(());
     }
@@ -73,21 +106,36 @@ async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
         );
         stream.write_all(response.as_bytes()).await?;
     } else if method == "POST" && path == "/api/audit" {
-        if let Some(body_start) = request.find("\r\n\r\n") {
-            let body = &request[body_start + 4..];
-            if let Ok(req) = serde_json::from_str::<AuditRequest>(body) {
-                let res = process_audit_request(req);
-                let json = serde_json::to_string(&res)?;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    json.len(),
-                    json
-                );
-                stream.write_all(response.as_bytes()).await?;
-                return Ok(());
+        // Parse Content-Length
+        let content_length: usize = header_str
+            .lines()
+            .find(|l| l.to_lowercase().starts_with("content-length:"))
+            .and_then(|l| l.split(':').nth(1))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+
+        let mut body_bytes = header_buf[body_start_idx..].to_vec();
+        while body_bytes.len() < content_length {
+            let n = stream.read(&mut temp_buf).await?;
+            if n == 0 {
+                break;
             }
+            body_bytes.extend_from_slice(&temp_buf[..n]);
         }
-        let err = "{\"error\":\"Invalid JSON request\"}";
+
+        if let Ok(req) = serde_json::from_slice::<AuditRequest>(&body_bytes) {
+            let res = process_audit_request(req);
+            let json = serde_json::to_string(&res)?;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json.len(),
+                json
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+
+        let err = "{\"error\":\"Invalid JSON request body\"}";
         let response = format!(
             "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             err.len(),
@@ -110,12 +158,16 @@ async fn handle_http_client(mut stream: TcpStream) -> anyhow::Result<()> {
 fn process_audit_request(req: AuditRequest) -> AuditResponse {
     let mut ledger = SwarmLedger::new();
     let mut escrow = EscrowManager::new();
+    let mut registry = AgentRegistry::new();
 
     let delegator_key = AgentKeypair::generate();
     let worker_key = AgentKeypair::generate();
 
     let delegator_id = "Delegator_Alpha".to_string();
     let worker_id = "Worker_Auditor_Beta".to_string();
+
+    registry.register_agent(&delegator_id, delegator_key.public_key_hex());
+    registry.register_agent(&worker_id, worker_key.public_key_hex());
 
     ledger.deposit(&delegator_id, 1000);
     let task = TaskSpec::new(
@@ -128,7 +180,9 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
     );
 
     ledger.withdraw(&delegator_id, req.bounty);
-    escrow.lock_escrow(task.id, delegator_id.clone(), req.bounty).ok();
+    escrow
+        .lock_escrow(task.id, delegator_id.clone(), req.bounty)
+        .ok();
 
     let bid = CandidateBid {
         worker_id: worker_id.clone(),
@@ -137,7 +191,9 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
         reputation_score: 98,
     };
     let winning_bid = AuctionMatcher::select_best_bid(&[bid], req.bounty).unwrap();
-    escrow.assign_worker(task.id, winning_bid.worker_id.clone()).ok();
+    escrow
+        .assign_worker(task.id, winning_bid.worker_id.clone())
+        .ok();
 
     let report = ContractAuditor::audit_source(&req.file_name, &req.code);
     let output_json = serde_json::to_string(&report).unwrap();
@@ -151,8 +207,11 @@ fn process_audit_request(req: AuditRequest) -> AuditResponse {
         winning_bid.estimated_duration_ms,
     );
 
-    escrow.submit_receipt(receipt.clone(), task.challenge_window_seconds).ok();
-    let verified = SwarmVerifier::verify_work(&task, &receipt).unwrap_or(false);
+    escrow
+        .submit_receipt(receipt.clone(), task.challenge_window_seconds)
+        .ok();
+    let verified =
+        SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry)).unwrap_or(false);
     escrow.finalize_settlement(task.id).ok();
 
     AuditResponse {
@@ -192,12 +251,12 @@ fn get_dashboard_html() -> String {
                     <span class="text-yellow-400"><i class="fa-solid fa-brands fa-hive"></i></span>
                     HiveKernel Mission Control
                 </h1>
-                <p class="text-slate-400 text-sm mt-1">Autonomous P2P AI Agent Subcontracting & Settlement Engine in Rust</p>
+                <p class="text-slate-400 text-sm mt-1">Autonomous P2P Agent Subcontracting & Deterministic Verification Kernel</p>
             </div>
             <div class="flex items-center gap-3">
-                <span class="px-3 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded-full border border-green-500/30 flex items-center gap-2">
+                <span id="nodeStatusBadge" class="px-3 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded-full border border-green-500/30 flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-green-400 animate-ping"></span>
-                    Swarm Mesh Active
+                    Local Host Active
                 </span>
                 <span class="px-3 py-1 bg-purple-500/20 text-purple-300 text-xs font-bold rounded-full border border-purple-500/30">
                     Swarm Village Hackathon
@@ -281,7 +340,7 @@ contract LiquidityVault {
                     <div id="outputArea" class="space-y-4">
                         <div class="p-8 text-center text-slate-500 border border-dashed border-slate-800 rounded-xl">
                             <i class="fa-solid fa-satellite-dish text-4xl mb-3 text-slate-700 animate-pulse"></i>
-                            <p>Click "Launch Autonomous Swarm Audit" to broadcast RFQ to P2P nodes</p>
+                            <p>Click "Launch Autonomous Swarm Audit" to run deterministic analysis</p>
                         </div>
                     </div>
                 </div>
@@ -291,6 +350,16 @@ contract LiquidityVault {
     </div>
 
     <script>
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
         async function submitTask() {
             const fileName = document.getElementById('fileName').value;
             const bounty = parseInt(document.getElementById('bounty').value);
@@ -300,7 +369,7 @@ contract LiquidityVault {
             outputArea.innerHTML = `
                 <div class="p-8 text-center text-cyan-400 space-y-3">
                     <i class="fa-solid fa-spinner fa-spin text-3xl"></i>
-                    <p class="font-bold">Broadcasting RFQ to Rust P2P Swarm Network...</p>
+                    <p class="font-bold">Executing Deterministic Swarm Verification...</p>
                 </div>
             `;
 
@@ -325,11 +394,11 @@ contract LiquidityVault {
                     findingsHtml = data.report.findings.map((f, i) => `
                         <div class="p-4 bg-slate-900 border-l-4 border-red-500 rounded-r-xl space-y-1">
                             <div class="flex justify-between items-center">
-                                <span class="font-bold text-red-400 text-sm">[#${i+1}] ${f.title}</span>
-                                <span class="text-xs font-mono bg-red-500/20 text-red-300 px-2 py-0.5 rounded">Line ${f.line_number}</span>
+                                <span class="font-bold text-red-400 text-sm">[#${i+1}] ${escapeHtml(f.title)}</span>
+                                <span class="text-xs font-mono bg-red-500/20 text-red-300 px-2 py-0.5 rounded">Line ${escapeHtml(f.line_number)}</span>
                             </div>
-                            <pre class="text-xs font-mono text-slate-400 bg-slate-950 p-2 rounded">${f.code_snippet}</pre>
-                            <p class="text-xs text-green-300 font-semibold mt-1">Recommendation: ${f.recommendation}</p>
+                            <pre class="text-xs font-mono text-slate-400 bg-slate-950 p-2 rounded whitespace-pre-wrap">${escapeHtml(f.code_snippet)}</pre>
+                            <p class="text-xs text-green-300 font-semibold mt-1">Recommendation: ${escapeHtml(f.recommendation)}</p>
                         </div>
                     `).join('');
                 }
@@ -337,10 +406,11 @@ contract LiquidityVault {
                 outputArea.innerHTML = `
                     <div class="space-y-4">
                         <div class="p-4 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono space-y-1">
-                            <div><span class="text-slate-500">Task ID:</span> <span class="text-cyan-400">${data.task_id}</span></div>
-                            <div><span class="text-slate-500">Winning Agent:</span> <span class="text-purple-400">${data.winning_worker}</span></div>
-                            <div><span class="text-slate-500">Execution Digest:</span> <span class="text-slate-300">${data.execution_digest}</span></div>
-                            <div><span class="text-slate-500">Ed25519 Signature:</span> <span class="text-yellow-400">${data.signature.substring(0, 32)}...</span></div>
+                            <div><span class="text-slate-500">Task ID:</span> <span class="text-cyan-400">${escapeHtml(data.task_id)}</span></div>
+                            <div><span class="text-slate-500">Winning Worker:</span> <span class="text-purple-400">${escapeHtml(data.winning_worker)}</span></div>
+                            <div><span class="text-slate-500">Execution Digest:</span> <span class="text-slate-300">${escapeHtml(data.execution_digest)}</span></div>
+                            <div><span class="text-slate-500">Ed25519 Signature:</span> <span class="text-yellow-400">${escapeHtml(data.signature.substring(0, 32))}...</span></div>
+                            <div><span class="text-slate-500">Validator Verification:</span> <span class="text-green-400 font-bold">${data.verified ? "PASS (Mathematical Integrity Verified)" : "FAIL"}</span></div>
                         </div>
 
                         <div>
@@ -351,7 +421,7 @@ contract LiquidityVault {
                 `;
 
             } catch (e) {
-                outputArea.innerHTML = `<div class="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400">Error: ${e.message}</div>`;
+                outputArea.innerHTML = `<div class="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400">Error: ${escapeHtml(e.message)}</div>`;
             }
         }
     </script>

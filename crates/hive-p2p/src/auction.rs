@@ -14,7 +14,9 @@ pub struct AuctionMatcher;
 impl AuctionMatcher {
     pub fn select_best_bid(bids: &[CandidateBid], max_bounty: u64) -> Result<CandidateBid> {
         if bids.is_empty() {
-            return Err(HiveError::TaskExecutionError("No bids received for RFQ".to_string()));
+            return Err(HiveError::TaskExecutionError(
+                "No bids received for RFQ".to_string(),
+            ));
         }
 
         let mut ranked = bids.to_vec();
@@ -28,7 +30,9 @@ impl AuctionMatcher {
     }
 
     fn compute_score(bid: &CandidateBid, max_bounty: u64) -> u64 {
-        let price_factor = (max_bounty * 100).checked_div(bid.bid_bounty).unwrap_or(100);
+        let price_factor = (max_bounty * 100)
+            .checked_div(bid.bid_bounty)
+            .unwrap_or(100);
         let rep_factor = bid.reputation_score as u64;
         let latency_penalty = (bid.estimated_duration_ms / 100).max(1);
 
