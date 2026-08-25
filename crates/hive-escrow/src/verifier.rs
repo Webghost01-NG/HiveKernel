@@ -2,6 +2,7 @@ use hive_core::{
     auditor::{AuditReport, ContractAuditor},
     error::{HiveError, Result},
     receipt::TaskReceipt,
+    registry::AgentRegistry,
     types::TaskSpec,
 };
 use serde::{Deserialize, Serialize};
@@ -21,9 +22,17 @@ pub struct FraudProof {
 pub struct SwarmVerifier;
 
 impl SwarmVerifier {
-    /// Objective verification: Re-runs the deterministic analysis kernel over the input code
-    /// and compares the result mathematically with the worker's signed receipt.
-    pub fn verify_work(spec: &TaskSpec, receipt: &TaskReceipt) -> Result<bool> {
+    /// Objective verification:
+    /// 1. Verifies Ed25519 signature validity.
+    /// 2. Verifies cryptographic content binding (TaskID, WorkerID, InputHash, OutputHash, Timestamp -> ExecutionDigest).
+    /// 3. Validates Worker identity against Swarm Registry if provided.
+    /// 4. Independently re-executes the deterministic analysis kernel over the input code.
+    /// 5. Compares vulnerability count and security scores mathematically.
+    pub fn verify_work_with_registry(
+        spec: &TaskSpec,
+        receipt: &TaskReceipt,
+        registry: Option<&AgentRegistry>,
+    ) -> Result<bool> {
         // 1. Verify cryptographic Ed25519 signature
         if !receipt.verify_signature()? {
             return Err(HiveError::SignatureError(
@@ -38,14 +47,25 @@ impl SwarmVerifier {
             ));
         }
 
-        // 3. Deserialize worker's output payload into AuditReport
-        let worker_report: AuditReport = serde_json::from_str(&receipt.output_payload)
-            .map_err(|e| HiveError::TaskExecutionError(format!("Worker returned invalid JSON schema: {}", e)))?;
+        // 3. Verify cryptographic binding to actual input and output payloads
+        receipt.verify_content_integrity(&spec.input_payload)?;
 
-        // 4. Independent re-execution: Validator audits the exact same code
-        let validator_report = ContractAuditor::audit_source(&spec.description, &spec.input_payload);
+        // 4. Verify Worker identity in AgentRegistry if available
+        if let Some(reg) = registry {
+            reg.verify_agent_identity(&receipt.worker_id, &receipt.worker_pubkey)?;
+        }
 
-        // 5. Mathematical consistency check
+        // 5. Deserialize worker's output payload into AuditReport
+        let worker_report: AuditReport =
+            serde_json::from_str(&receipt.output_payload).map_err(|e| {
+                HiveError::TaskExecutionError(format!("Worker returned invalid JSON schema: {}", e))
+            })?;
+
+        // 6. Independent re-execution: Validator audits the exact same code
+        let validator_report =
+            ContractAuditor::audit_source(&spec.description, &spec.input_payload);
+
+        // 7. Mathematical consistency checks
         if worker_report.total_vulnerabilities != validator_report.total_vulnerabilities {
             let proof = FraudProof {
                 task_id: spec.id.to_string(),
@@ -59,7 +79,9 @@ impl SwarmVerifier {
                 validator_score: validator_report.security_score,
                 worker_score: worker_report.security_score,
             };
-            return Err(HiveError::TaskExecutionError(serde_json::to_string(&proof)?));
+            return Err(HiveError::TaskExecutionError(serde_json::to_string(
+                &proof,
+            )?));
         }
 
         if worker_report.security_score != validator_report.security_score {
@@ -75,9 +97,15 @@ impl SwarmVerifier {
                 validator_score: validator_report.security_score,
                 worker_score: worker_report.security_score,
             };
-            return Err(HiveError::TaskExecutionError(serde_json::to_string(&proof)?));
+            return Err(HiveError::TaskExecutionError(serde_json::to_string(
+                &proof,
+            )?));
         }
 
         Ok(true)
+    }
+
+    pub fn verify_work(spec: &TaskSpec, receipt: &TaskReceipt) -> Result<bool> {
+        Self::verify_work_with_registry(spec, receipt, None)
     }
 }

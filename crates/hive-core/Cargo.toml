@@ -15,3 +15,6 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 hex = { workspace = true }
+aes-gcm = { workspace = true }
+pbkdf2 = { workspace = true }
+hmac = { workspace = true }

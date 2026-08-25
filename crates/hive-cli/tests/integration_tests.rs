@@ -1,30 +1,33 @@
+use chrono::{Duration, Utc};
 use hive_core::{
     auditor::ContractAuditor,
     receipt::{AgentKeypair, TaskReceipt},
+    registry::AgentRegistry,
     types::{AgentCapability, TaskSpec, TaskStatus},
 };
-use hive_escrow::{
-    escrow::EscrowManager,
-    settlement::SwarmLedger,
-    verifier::SwarmVerifier,
-};
+use hive_escrow::{escrow::EscrowManager, settlement::SwarmLedger, verifier::SwarmVerifier};
 use hive_p2p::auction::{AuctionMatcher, CandidateBid};
 
 #[tokio::test]
 async fn test_full_optimistic_lifecycle_success() {
     let mut ledger = SwarmLedger::new();
     let mut escrow = EscrowManager::new();
+    let mut registry = AgentRegistry::new();
 
     let delegator = "Agent_Delegator".to_string();
     let worker = "Agent_Worker_Beta".to_string();
     let worker_key = AgentKeypair::generate();
+    let delegator_key = AgentKeypair::generate();
+
+    registry.register_agent(&delegator, delegator_key.public_key_hex());
+    registry.register_agent(&worker, worker_key.public_key_hex());
 
     ledger.deposit(&delegator, 500);
     assert_eq!(ledger.balance_of(&delegator), 500);
 
     let task = TaskSpec::new(
         delegator.clone(),
-        "0011223344".to_string(),
+        delegator_key.public_key_hex(),
         AgentCapability::SmartContractAuditor,
         "Staking.sol",
         "contract Staking {}",
@@ -46,7 +49,7 @@ async fn test_full_optimistic_lifecycle_success() {
     assert_eq!(winning_bid.worker_id, worker);
     assert!(escrow.assign_worker(task.id, worker.clone()).is_ok());
 
-    // 3. Worker executes & signs
+    // 3. Worker executes & signs with full cryptographic binding
     let report = ContractAuditor::audit_source(&task.description, &task.input_payload);
     let output_json = serde_json::to_string(&report).unwrap();
 
@@ -62,11 +65,15 @@ async fn test_full_optimistic_lifecycle_success() {
     assert!(escrow.submit_receipt(receipt.clone(), 10).is_ok());
 
     // 4. Validator verifies
-    let is_valid = SwarmVerifier::verify_work(&task, &receipt).unwrap();
+    let is_valid =
+        SwarmVerifier::verify_work_with_registry(&task, &receipt, Some(&registry)).unwrap();
     assert!(is_valid);
 
-    // 5. Finalize settlement
-    let final_status = escrow.finalize_settlement(task.id).unwrap();
+    // 5. Finalize settlement after challenge window
+    let after_deadline = Utc::now() + Duration::seconds(15);
+    let final_status = escrow
+        .finalize_settlement_at(task.id, after_deadline)
+        .unwrap();
     assert_eq!(final_status, TaskStatus::Settled);
 
     ledger.deposit(&worker, 100);

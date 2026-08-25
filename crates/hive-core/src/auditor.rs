@@ -21,6 +21,7 @@ pub struct AuditReport {
     pub summary: String,
 }
 
+/// Deterministic Static Security & Gas Analysis Engine
 pub struct ContractAuditor;
 
 impl ContractAuditor {
@@ -37,102 +38,148 @@ impl ContractAuditor {
             let line_num = idx + 1;
             let trimmed = line.trim();
 
-            // Skip single-line comments
+            // Skip comment-only lines
             if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
                 continue;
             }
 
-            // Reset call tracking when entering a new function boundary
-            if trimmed.starts_with("function ") || trimmed.starts_with("modifier ") || trimmed.starts_with("contract ") {
+            // Function boundary reset
+            if trimmed.starts_with("function ")
+                || trimmed.starts_with("modifier ")
+                || trimmed.starts_with("contract ")
+            {
                 external_call_found = false;
                 call_line = 0;
             }
 
-            // 1. Check for tx.origin authentication vulnerability
+            // 1. Insecure tx.origin authorization
             if line.contains("tx.origin") {
                 findings.push(VulnerabilityFinding {
                     severity: "HIGH".to_string(),
                     title: "Insecure Use of tx.origin for Authorization".to_string(),
                     line_number: line_num,
                     code_snippet: trimmed.to_string(),
-                    description: "tx.origin is vulnerable to phishing and intermediary contract attacks.".to_string(),
-                    recommendation: "Replace tx.origin with msg.sender for all authentication checks.".to_string(),
+                    description: "tx.origin is vulnerable to phishing and intermediary proxy/contract attacks.".to_string(),
+                    recommendation: "Replace tx.origin with msg.sender for access control checks.".to_string(),
                 });
                 security_score -= 30;
             }
 
-            // 2. Track external calls for Reentrancy detection
-            if line.contains(".call{value:") || line.contains(".call.value(") {
+            // 2. Track external calls
+            let has_external_call = line.contains(".call{value:") || line.contains(".call.value(");
+            if has_external_call {
                 external_call_found = true;
                 call_line = line_num;
             }
 
-            // Detect state mutation occurring after the external call within the same function
-            if external_call_found
-                && line_num > call_line
-                && (line.contains("=") || line.contains("-=") || line.contains("+="))
+            // Detect state mutation occurring after the external call (including on the same line if minified)
+            let has_mutation = (line.contains("=") || line.contains("-=") || line.contains("+="))
                 && !line.contains("==")
                 && !line.contains("!=")
                 && !line.contains("<=")
                 && !line.contains(">=")
-            {
-                findings.push(VulnerabilityFinding {
-                    severity: "CRITICAL".to_string(),
-                    title: "Reentrancy Vulnerability (Checks-Effects-Interactions Violation)".to_string(),
-                    line_number: line_num,
-                    code_snippet: format!("Call at line {}: {}\nMutation at line {}: {}", call_line, lines[call_line - 1].trim(), line_num, trimmed),
-                    description: "State variable was modified after an external Ether transfer, enabling reentrant drains.".to_string(),
-                    recommendation: "Update state variables BEFORE external calls or inherit ReentrancyGuard.".to_string(),
-                });
-                security_score -= 45;
-                external_call_found = false; // Reset after recording finding
+                && !line.contains("bytes32")
+                && !line.contains("uint256")
+                && !line.contains("address")
+                && !line.contains("bool");
+
+            if external_call_found {
+                // Multi-line reentrancy
+                if line_num > call_line && has_mutation {
+                    findings.push(VulnerabilityFinding {
+                        severity: "CRITICAL".to_string(),
+                        title: "Reentrancy Vulnerability (Checks-Effects-Interactions Violation)".to_string(),
+                        line_number: line_num,
+                        code_snippet: format!(
+                            "Call at line {}: {}\nMutation at line {}: {}",
+                            call_line,
+                            lines.get(call_line - 1).unwrap_or(&"").trim(),
+                            line_num,
+                            trimmed
+                        ),
+                        description: "State variable is modified after an external Ether transfer, allowing reentrant drains.".to_string(),
+                        recommendation: "Update state variables BEFORE external calls or inherit OpenZeppelin ReentrancyGuard.".to_string(),
+                    });
+                    security_score -= 45;
+                    external_call_found = false;
+                }
+                // Single-line reentrancy
+                else if line_num == call_line {
+                    if let Some(call_idx) = line.find(".call") {
+                        let after_call = &line[call_idx..];
+                        if (after_call.contains("=")
+                            || after_call.contains("-=")
+                            || after_call.contains("+="))
+                            && !after_call.contains("==")
+                            && !after_call.contains("!=")
+                            && !after_call.contains("bool success")
+                            && !after_call.contains("bool s")
+                        {
+                            findings.push(VulnerabilityFinding {
+                                severity: "CRITICAL".to_string(),
+                                title: "Reentrancy Vulnerability (Checks-Effects-Interactions Violation)".to_string(),
+                                line_number: line_num,
+                                code_snippet: trimmed.to_string(),
+                                description: "State mutation follows external call on the same statement line.".to_string(),
+                                recommendation: "Enforce Checks-Effects-Interactions pattern.".to_string(),
+                            });
+                            security_score -= 45;
+                            external_call_found = false;
+                        }
+                    }
+                }
             }
 
-            // 3. Check for Unchecked Call Return Values
-            if line.contains(".call(") && !line.contains("require(") && !line.contains("(bool success") && !line.contains("(bool s") {
+            // 3. Unchecked low-level call return value
+            if line.contains(".call(")
+                && !line.contains("require(")
+                && !line.contains("(bool success")
+                && !line.contains("(bool s")
+            {
                 findings.push(VulnerabilityFinding {
                     severity: "MEDIUM".to_string(),
                     title: "Unchecked Low-Level Call Return Value".to_string(),
                     line_number: line_num,
                     code_snippet: trimmed.to_string(),
-                    description: "Low-level .call() return value is ignored, risking silent failure.".to_string(),
-                    recommendation: "Verify boolean success: (bool success, ) = target.call(...); require(success);".to_string(),
+                    description: "Low-level .call() return boolean is not validated, risking silent execution failure.".to_string(),
+                    recommendation: "Validate call return: (bool success, ) = target.call(...); require(success);".to_string(),
                 });
                 security_score -= 15;
             }
 
-            // 4. Check for selfdestruct usage
+            // 4. Deprecated selfdestruct opcode
             if line.contains("selfdestruct(") || line.contains("suicide(") {
                 findings.push(VulnerabilityFinding {
                     severity: "HIGH".to_string(),
                     title: "Deprecated selfdestruct Opcode Usage".to_string(),
                     line_number: line_num,
                     code_snippet: trimmed.to_string(),
-                    description: "selfdestruct behavior is deprecated under Cancun / EIP-6780.".to_string(),
-                    recommendation: "Refactor logic to deactivate contract functions instead of destroying bytecode.".to_string(),
+                    description: "selfdestruct opcode is deprecated under EIP-6780 (Cancun hardfork).".to_string(),
+                    recommendation: "Refactor logic to pause or deactivate contracts without opcode destruction.".to_string(),
                 });
                 security_score -= 20;
             }
 
-            // 5. Check for unsafe delegatecall
+            // 5. Unsafe arbitrary delegatecall
             if line.contains(".delegatecall(") && !line.contains("onlyOwner") {
                 findings.push(VulnerabilityFinding {
                     severity: "CRITICAL".to_string(),
                     title: "Unrestricted delegatecall Execution".to_string(),
                     line_number: line_num,
                     code_snippet: trimmed.to_string(),
-                    description: "Arbitrary delegatecall allows callers to execute malicious code in the context of this contract.".to_string(),
-                    recommendation: "Restrict delegatecall targets to an immutable or owner-approved whitelist.".to_string(),
+                    description: "Arbitrary delegatecall allows callers to execute malicious bytecode within the contract's storage context.".to_string(),
+                    recommendation: "Restrict delegatecall execution targets to an immutable or owner-approved whitelist.".to_string(),
                 });
                 security_score -= 50;
             }
         }
 
-        // Gas Optimization Evaluation
+        // Gas Optimization Grade
         let gas_grade = if code.contains("memory") && !code.contains("calldata") {
-            "B- (Use calldata for external function input arguments)".to_string()
+            "B- (Use calldata for external function input arguments to reduce gas consumption)"
+                .to_string()
         } else if code.contains("uint8") || code.contains("uint16") {
-            "B+ (Verify struct packing to prevent non-standard word padding gas overhead)".to_string()
+            "B+ (Verify struct packing to prevent 32-byte EVM word padding overhead)".to_string()
         } else {
             "A+ (Optimized EVM word alignment and storage layout)".to_string()
         };
