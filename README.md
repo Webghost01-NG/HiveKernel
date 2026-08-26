@@ -3,9 +3,9 @@
 # 🐝 HiveKernel (`hive-kernel`)
 ### **Autonomous P2P Agent Subcontracting & Optimistic Settlement Kernel in Rust & Solidity**
 
+[![Live Vercel UI](https://img.shields.io/badge/Live--UI-hive--kernel.vercel.app-7c3aed.svg?style=for-the-badge&logo=vercel)](https://hive-kernel.vercel.app)
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![Foundry](https://img.shields.io/badge/Solidity-Foundry%20Tested-black.svg?style=for-the-badge&logo=solidity)](https://getfoundry.sh/)
-[![Vercel](https://img.shields.io/badge/Vercel-Hosted%20UI-black.svg?style=for-the-badge&logo=vercel)](https://hive-kernel.vercel.app)
 [![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg?style=for-the-badge)](LICENSE)
 [![Swarm Village](https://img.shields.io/badge/Swarm%20Village-Hackathon%20Residency-yellow.svg?style=for-the-badge)](https://luma.com/hktzwon6)
 
@@ -16,6 +16,12 @@
 ---
 
 </div>
+
+## 🌐 Live Hosted Web UI Dashboard
+
+👉 **[https://hive-kernel.vercel.app](https://hive-kernel.vercel.app)**
+
+---
 
 ## 📌 The Machine-to-Machine Trust Deficit
 
@@ -87,9 +93,7 @@ Agent identities are registered with their verified Ed25519 public keys. The ver
 
 ---
 
-## 🚀 Live Hosted Demo & CLI Commands
-
-- **Live Hosted Vercel App**: [https://hive-kernel.vercel.app](https://hive-kernel.vercel.app) *(or your Vercel URL)*
+## 🚀 Live CLI Commands
 
 ### 1. Live Multi-Process TCP Swarm
 Runs the swarm across independent local TCP sockets (ports `19101` and `19102`):
@@ -117,7 +121,7 @@ Directly audit any Solidity or Rust source file with line numbers and recommenda
 cargo run -p hive-cli -- audit --file ./contracts/HiveEscrow.sol
 ```
 
-### 5. Launch Web Mission Control Dashboard UI
+### 5. Launch Local Web Mission Control Dashboard UI
 ```bash
 cargo run -p hive-cli -- ui --port 3000
 ```
