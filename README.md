@@ -5,9 +5,9 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![Foundry](https://img.shields.io/badge/Solidity-Foundry%20Tested-black.svg?style=for-the-badge&logo=solidity)](https://getfoundry.sh/)
+[![Vercel](https://img.shields.io/badge/Vercel-Hosted%20UI-black.svg?style=for-the-badge&logo=vercel)](https://hive-kernel.vercel.app)
 [![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg?style=for-the-badge)](LICENSE)
 [![Swarm Village](https://img.shields.io/badge/Swarm%20Village-Hackathon%20Residency-yellow.svg?style=for-the-badge)](https://luma.com/hktzwon6)
-[![Web3Bridge](https://img.shields.io/badge/Powered%20By-HERŌ%20Network%20%26%20Web3Bridge-purple.svg?style=for-the-badge)](https://heronetwork.xyz)
 
 <p align="center">
   <b>A modular, asynchronous Actor kernel in Rust enabling autonomous AI agent swarms to discover peers over live TCP/P2P sockets, delegate deterministic smart contract audits, exchange cryptographically bound Ed25519 execution receipts, and enforce trustless settlement with collateral staking and dispute slashing on EVM networks.</b>
@@ -87,51 +87,15 @@ Agent identities are registered with their verified Ed25519 public keys. The ver
 
 ---
 
-## 🏛️ System Architecture
+## 🚀 Live Hosted Demo & CLI Commands
 
-```text
-HiveKernel/
-├── crates/
-│   ├── hive-core/       # On-disk Keystore (AES-256-GCM + PBKDF2), TaskReceipt, AgentRegistry, Auditor
-│   ├── hive-p2p/        # Asynchronous TCP node server & client, RFQ auction matcher, wire protocol
-│   ├── hive-escrow/     # Mathematical FraudProof verifier, optimistic challenge window, SwarmLedger
-│   └── hive-cli/        # CLI suite, live TCP multi-process runner, Web Mission Control UI
-├── contracts/           # EVM Solidity smart contracts for on-chain collateralized escrow
-│   ├── HiveEscrow.sol   # Staking, non-custodial escrow, and dispute slashing contract
-│   ├── test/            # Foundry Solidity unit tests with staking & slashing validation
-│   └── script/          # Foundry deployment scripts
-├── foundry.toml         # Foundry configuration
-└── Cargo.toml           # Root workspace manifest with strict versioning
-```
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- [Rust](https://www.rust-lang.org/) (version 1.80+)
-- [Foundry](https://getfoundry.sh/) (`forge`, `anvil`, `cast`)
-
-### Installation & Build
-
-```bash
-# Clone the repository
-git clone https://github.com/Webghost01-NG/HiveKernel.git
-cd HiveKernel
-
-# Build the workspace
-cargo build --release
-```
-
----
-
-## 🧪 CLI Commands & Live Swarm Usage
+- **Live Hosted Vercel App**: [https://hive-kernel.vercel.app](https://hive-kernel.vercel.app) *(or your Vercel URL)*
 
 ### 1. Live Multi-Process TCP Swarm
 Runs the swarm across independent local TCP sockets (ports `19101` and `19102`):
 
 ```bash
-cargo run -p hive-cli -- live-swarm --bounty 200
+cargo run -p hive-cli -- live-swarm --file ./contracts/HiveEscrow.sol --bounty 180
 ```
 
 ### 2. Full Simulation with Cryptographic Identity Binding
@@ -158,11 +122,6 @@ cargo run -p hive-cli -- audit --file ./contracts/HiveEscrow.sol
 cargo run -p hive-cli -- ui --port 3000
 ```
 Open **[http://localhost:3000](http://localhost:3000)** in your browser for the interactive Web UI.
-
-### 6. Generate AES-256-GCM Encrypted Keystore
-```bash
-cargo run -p hive-cli -- keygen --name worker_beta --out-dir ./keystore --passphrase "my_secure_password"
-```
 
 ---
 
